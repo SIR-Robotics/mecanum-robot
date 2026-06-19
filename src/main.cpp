@@ -6,8 +6,8 @@ mecanumCar robot(3, 2);  // SDA=D3, SCL=D2
 const uint8_t ECHO_PIN = 13;
 const uint8_t TRIG_PIN = 12;
 
-const uint8_t DEFAULT_SPEED = 90;        // 0-255
-const uint8_t OBSTACLE_DISTANCE_CM = 20; // Rotate when an object is this close.
+const uint8_t DEFAULT_SPEED = 50;        // 0-255
+const uint8_t OBSTACLE_DISTANCE_CM = 40; // Rotate when an object is this close.
 const uint16_t TURN_90_MS = 350;         // Tune this for a physical 90 degree turn.
 const uint16_t LOG_INTERVAL_MS = 250;
 
