@@ -12,7 +12,7 @@ const uint8_t TRIG_PIN = 12;
 const uint8_t SERVO_PIN = 9;
 
 const uint8_t DEFAULT_SPEED = 50;        // 0-255
-const uint8_t OBSTACLE_DISTANCE_CM = 40; // Rotate when an object is this close.
+const uint8_t OBSTACLE_DISTANCE_CM = 50; // Rotate when an object is this close.
 const uint16_t TURN_90_MS = 350;         // Tune this for a physical 90 degree turn.
 const uint16_t POST_TURN_SETTLE_MS = 300;
 const uint16_t LOG_INTERVAL_MS = 250;
@@ -21,43 +21,38 @@ const uint16_t IR_COMMAND_COOLDOWN_MS = 250;
 const unsigned long ULTRASONIC_TIMEOUT_US = 12000UL;
 const uint8_t START_STOP_KEY = 64;
 const uint8_t SERVO_KEY = 22;
-const uint8_t SERVO_CLOSED_ANGLE = 0;
-const uint8_t SERVO_OPEN_ANGLE = 180;
+const uint8_t SERVO_CLOSED_ANGLE = 40;
+const uint8_t SERVO_OPEN_ANGLE = 110;
 
 unsigned long lastLogMs = 0;
 unsigned long lastDistanceCheckMs = 0;
 unsigned long lastIrCommandMs = 0;
 unsigned long turnEndMs = 0;
 unsigned long settleEndMs = 0;
+unsigned long ultrasonicStartUs = 0;
+unsigned long echoStartUs = 0;
 bool running = false;
 bool servoOpen = false;
 
 enum MotionState {
   STOPPED,
   MOVING_FORWARD,
-  TURNING_RIGHT
+  TURNING
 };
 
 MotionState motionState = STOPPED;
 
+enum UltrasonicState {
+  ULTRASONIC_IDLE,
+  ULTRASONIC_WAITING_FOR_RISE,
+  ULTRASONIC_WAITING_FOR_FALL
+};
+
+UltrasonicState ultrasonicState = ULTRASONIC_IDLE;
+
 void setSpeed(uint8_t speed) {
   speed_Upper_L = speed_Lower_L = speed;
   speed_Upper_R = speed_Lower_R = speed;
-}
-
-uint16_t getDistanceCm() {
-  digitalWrite(TRIG_PIN, LOW);
-  delayMicroseconds(2);
-  digitalWrite(TRIG_PIN, HIGH);
-  delayMicroseconds(10);
-  digitalWrite(TRIG_PIN, LOW);
-
-  unsigned long duration = pulseIn(ECHO_PIN, HIGH, ULTRASONIC_TIMEOUT_US);
-  if (duration == 0) {
-    return 999;
-  }
-
-  return duration / 58.2;
 }
 
 void logDistance(uint16_t distanceCm, bool obstacleNearby) {
@@ -98,21 +93,28 @@ void moveForward() {
   motionState = MOVING_FORWARD;
 }
 
-void startRightTurn() {
-  if (motionState == TURNING_RIGHT) {
+void startTurn() {
+  if (motionState == TURNING) {
     return;
   }
 
+  ultrasonicState = ULTRASONIC_IDLE;
   robot.Stop();
   delay(20);
   setSpeed(DEFAULT_SPEED);
-  robot.Turn_Right();
-  motionState = TURNING_RIGHT;
+  if (random(2) == 0) {
+    robot.Turn_Left();
+    Serial.println("Obstacle: turning left");
+  } else {
+    robot.Turn_Right();
+    Serial.println("Obstacle: turning right");
+  }
+  motionState = TURNING;
   turnEndMs = millis() + TURN_90_MS;
 }
 
 void updateTurn() {
-  if (motionState != TURNING_RIGHT) {
+  if (motionState != TURNING) {
     return;
   }
 
@@ -126,7 +128,7 @@ void updateTurn() {
 
 void handleIrCommand() {
   int key = IRreceive.getKey();
-  if (key == -1) {
+  if (key != START_STOP_KEY && key != SERVO_KEY) {
     return;
   }
 
@@ -154,12 +156,63 @@ void handleIrCommand() {
   }
 }
 
+void handleDistanceMeasurement(uint16_t distanceCm) {
+  bool obstacleNearby = distanceCm <= OBSTACLE_DISTANCE_CM;
+  logDistance(distanceCm, obstacleNearby);
+
+  if (obstacleNearby) {
+    startTurn();
+  } else {
+    moveForward();
+  }
+}
+
+void updateUltrasonic() {
+  unsigned long nowUs = micros();
+
+  if (ultrasonicState == ULTRASONIC_IDLE) {
+    if (millis() - lastDistanceCheckMs < DISTANCE_CHECK_MS) {
+      return;
+    }
+    lastDistanceCheckMs = millis();
+
+    digitalWrite(TRIG_PIN, LOW);
+    delayMicroseconds(2);
+    digitalWrite(TRIG_PIN, HIGH);
+    delayMicroseconds(10);
+    digitalWrite(TRIG_PIN, LOW);
+    ultrasonicStartUs = micros();
+    ultrasonicState = ULTRASONIC_WAITING_FOR_RISE;
+    return;
+  }
+
+  if (ultrasonicState == ULTRASONIC_WAITING_FOR_RISE) {
+    if (digitalRead(ECHO_PIN) == HIGH) {
+      echoStartUs = nowUs;
+      ultrasonicState = ULTRASONIC_WAITING_FOR_FALL;
+    } else if (nowUs - ultrasonicStartUs >= ULTRASONIC_TIMEOUT_US) {
+      ultrasonicState = ULTRASONIC_IDLE;
+      handleDistanceMeasurement(999);
+    }
+    return;
+  }
+
+  if (digitalRead(ECHO_PIN) == LOW) {
+    ultrasonicState = ULTRASONIC_IDLE;
+    handleDistanceMeasurement((nowUs - echoStartUs) / 58.2);
+  } else if (nowUs - echoStartUs >= ULTRASONIC_TIMEOUT_US) {
+    ultrasonicState = ULTRASONIC_IDLE;
+    handleDistanceMeasurement(999);
+  }
+}
+
 void setup() {
   pinMode(ECHO_PIN, INPUT);
   pinMode(TRIG_PIN, OUTPUT);
 
   Serial.begin(9600);
   robot.Init();
+  randomSeed(micros());
   servo.attach(SERVO_PIN);
   servo.write(SERVO_CLOSED_ANGLE);
   setSpeed(DEFAULT_SPEED);
@@ -175,23 +228,9 @@ void loop() {
     return;
   }
 
-  if (motionState == TURNING_RIGHT || (long)(millis() - settleEndMs) < 0) {
+  if (motionState == TURNING || (long)(millis() - settleEndMs) < 0) {
     return;
   }
 
-  if (millis() - lastDistanceCheckMs < DISTANCE_CHECK_MS) {
-    return;
-  }
-  lastDistanceCheckMs = millis();
-
-  uint16_t distanceCm = getDistanceCm();
-  bool obstacleNearby = distanceCm <= OBSTACLE_DISTANCE_CM;
-
-  logDistance(distanceCm, obstacleNearby);
-
-  if (obstacleNearby) {
-    startRightTurn();
-  } else {
-    moveForward();
-  }
+  updateUltrasonic();
 }
