@@ -214,33 +214,77 @@ void robotDance() {
 }
 
 void mechanichalShiver() {
-  const uint8_t PULSE_MS = 150;
+  const uint8_t SHIVER_SPEED = 60;
+  const uint8_t POLL_MS = 2;
+  const uint16_t CORRECT_MS = 60;
+  const uint16_t HUNT_MS = 100;
+  const uint8_t SHIVER_PULSE = 20;
+  const uint8_t FLUSH_EVERY = 50;
 
-  speed_Upper_L = speed_Lower_L = speed_Upper_R = speed_Lower_R = TEST_SPEED;
+  static uint8_t callCount = 0;
 
-  Serial.println("Motor pulse test...");
+  speed_Upper_L = speed_Lower_L = speed_Upper_R = speed_Lower_R = SHIVER_SPEED;
 
-  robot.Advance();    delay(PULSE_MS);
-  robot.Stop();       delay(80);
-
-  robot.Back();       delay(PULSE_MS);
-  robot.Stop();       delay(80);
-
-  robot.Turn_Left();  delay(PULSE_MS);
-  robot.Stop();       delay(80);
-
-  robot.Turn_Right(); delay(PULSE_MS);
-  robot.Stop();       delay(80);
-
-  Serial.println("Motor pulse test OK");
-  Serial.print("Flushing IR buffer... ");
-
-  for (int i = 0; i < 10; i++) {
+  if (++callCount >= FLUSH_EVERY) {
+    callCount = 0;
     IRreceive.getKey();
-    delay(10);
   }
 
-  Serial.println("OK");
+  bool sl = digitalRead(SensorLeft) == LOW;
+  bool sm = digitalRead(SensorMiddle) == LOW;
+  bool sr = digitalRead(SensorRight) == LOW;
+
+  if (sl && sm && sr) {
+    robot.Stop();
+    return;
+  }
+
+  if (sm) {
+    robot.Turn_Left();
+    for (uint8_t t = 0; t < SHIVER_PULSE; t += POLL_MS) {
+      delay(POLL_MS);
+      if (digitalRead(SensorMiddle) != LOW) break;
+    }
+    robot.Turn_Right();
+    for (uint8_t t = 0; t < SHIVER_PULSE; t += POLL_MS) {
+      delay(POLL_MS);
+      if (digitalRead(SensorMiddle) != LOW) break;
+    }
+    robot.Stop();
+    return;
+  }
+
+  if (sl) {
+    robot.Turn_Right();
+    for (uint16_t t = 0; t < CORRECT_MS; t += POLL_MS) {
+      delay(POLL_MS);
+      if (digitalRead(SensorMiddle) == LOW) break;
+    }
+    robot.Stop();
+    return;
+  }
+
+  if (sr) {
+    robot.Turn_Left();
+    for (uint16_t t = 0; t < CORRECT_MS; t += POLL_MS) {
+      delay(POLL_MS);
+      if (digitalRead(SensorMiddle) == LOW) break;
+    }
+    robot.Stop();
+    return;
+  }
+
+  robot.Turn_Left();
+  for (uint16_t t = 0; t < HUNT_MS; t += POLL_MS) {
+    delay(POLL_MS);
+    if (digitalRead(SensorLeft) == LOW || digitalRead(SensorMiddle) == LOW || digitalRead(SensorRight) == LOW) break;
+  }
+  robot.Turn_Right();
+  for (uint16_t t = 0; t < HUNT_MS; t += POLL_MS) {
+    delay(POLL_MS);
+    if (digitalRead(SensorLeft) == LOW || digitalRead(SensorMiddle) == LOW || digitalRead(SensorRight) == LOW) break;
+  }
+  robot.Stop();
 }
 
 void setup() {
@@ -284,6 +328,7 @@ void setup() {
   if (allOk) {
     Serial.println("=== ALL TESTS PASSED ===");
     // robotDance();
+    // mechanichalShiver();
   } else {
     Serial.println("=== INIT FAILED - CHECK WIRING ===");
   }
