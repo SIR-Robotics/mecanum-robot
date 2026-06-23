@@ -1,197 +1,210 @@
+/**
+ * Mobile Robot Control System
+ * Mecanum Car v2 with IR Remote Control + Servo Gripper
+ * 
+ * Microcontroller: Raspberry Pi Pico
+ * Motor Control: via MecanumCar_v2 class
+ * Input: IR Remote (RC-like control)
+ * Gripper: Servo-controlled
+ */
+
 #include <Arduino.h>
 #include <MecanumCar_v2.h>
 #include <Servo.h>
 #include "ir.h"
 
-IR IRreceive(A3);
-mecanumCar robot(3, 2);  // SDA=D3, SCL=D2
-Servo servo;
+// ─── Hardware Configuration ────────────────────────────────────────────────────
+IR IRreceive(A3);              // IR receiver module connected to analog pin A3
+mecanumCar robot(3, 2);        // I2C configuration: SDA=pin 3, SCL=pin 2
+Servo gripper;                 // Servo for gripper control
+const uint8_t SERVO_PIN = 9;   // Servo PWM pin
+// ──────────────────────────────────────────────────────────────────────────────
 
-const uint8_t ECHO_PIN = 13;
-const uint8_t TRIG_PIN = 12;
-const uint8_t SERVO_PIN = 9;
+// ─── Calibration & Motor Speed ─────────────────────────────────────────────────
+#define DEFAULT_SPEED  150     // Motor PWM speed (0–255, higher = faster)
+#define RIGHT_SPEED    150     // Right motors PWM speed
+#define LEFT_SPEED     130     // Left motors PWM speed
+#define TURN_90_MS     750     // Time (ms) to rotate ~90° at DEFAULT_SPEED
+// ──────────────────────────────────────────────────────────────────────────────
 
-const uint8_t DEFAULT_SPEED = 50;        // 0-255
-const uint8_t OBSTACLE_DISTANCE_CM = 40; // Rotate when an object is this close.
-const uint16_t TURN_90_MS = 350;         // Tune this for a physical 90 degree turn.
-const uint16_t POST_TURN_SETTLE_MS = 300;
-const uint16_t LOG_INTERVAL_MS = 250;
-const uint16_t DISTANCE_CHECK_MS = 100;
-const uint16_t IR_COMMAND_COOLDOWN_MS = 250;
-const unsigned long ULTRASONIC_TIMEOUT_US = 12000UL;
-const uint8_t START_STOP_KEY = 64;
-const uint8_t SERVO_KEY = 22;
-const uint8_t SERVO_CLOSED_ANGLE = 0;
-const uint8_t SERVO_OPEN_ANGLE = 180;
+// ─── Servo Configuration ──────────────────────────────────────────────────────
+#define SERVO_CLOSED_ANGLE  0   // Gripper closed position (degrees)
+#define SERVO_OPEN_ANGLE    180 // Gripper open position (degrees)
+#define SERVO_TRANSITION_MS 500 // Time for servo to move (ms)
+// ──────────────────────────────────────────────────────────────────────────────
 
-unsigned long lastLogMs = 0;
-unsigned long lastDistanceCheckMs = 0;
-unsigned long lastIrCommandMs = 0;
-unsigned long turnEndMs = 0;
-unsigned long settleEndMs = 0;
-bool running = false;
-bool servoOpen = false;
+// ─── State Management ─────────────────────────────────────────────────────────
+bool isLedOn = false;
+bool isGripperOpen = false;    // Tracks gripper state
+unsigned long lastServoMoveMs = 0;
+// ──────────────────────────────────────────────────────────────────────────────
 
-enum MotionState {
-  STOPPED,
-  MOVING_FORWARD,
-  TURNING_RIGHT
-};
-
-MotionState motionState = STOPPED;
-
-void setSpeed(uint8_t speed) {
-  speed_Upper_L = speed_Lower_L = speed;
-  speed_Upper_R = speed_Lower_R = speed;
-}
-
-uint16_t getDistanceCm() {
-  digitalWrite(TRIG_PIN, LOW);
-  delayMicroseconds(2);
-  digitalWrite(TRIG_PIN, HIGH);
-  delayMicroseconds(10);
-  digitalWrite(TRIG_PIN, LOW);
-
-  unsigned long duration = pulseIn(ECHO_PIN, HIGH, ULTRASONIC_TIMEOUT_US);
-  if (duration == 0) {
-    return 999;
-  }
-
-  return duration / 58.2;
-}
-
-void logDistance(uint16_t distanceCm, bool obstacleNearby) {
-  unsigned long now = millis();
-  if (now - lastLogMs < LOG_INTERVAL_MS) {
-    return;
-  }
-
-  Serial.print("Distance: ");
-  if (distanceCm >= 999) {
-    Serial.print("out of range");
-  } else {
-    Serial.print(distanceCm);
-    Serial.print(" cm");
-  }
-
-  Serial.print(" | ");
-  Serial.println(obstacleNearby ? "obstacle: rotating" : "clear: moving forward");
-  lastLogMs = now;
-}
-
-void stopRobot() {
-  if (motionState == STOPPED) {
-    return;
-  }
-
-  robot.Stop();
-  motionState = STOPPED;
-}
-
-void moveForward() {
-  if (motionState == MOVING_FORWARD) {
-    return;
-  }
-
-  setSpeed(DEFAULT_SPEED);
-  robot.Advance();
-  motionState = MOVING_FORWARD;
-}
-
-void startRightTurn() {
-  if (motionState == TURNING_RIGHT) {
-    return;
-  }
-
-  robot.Stop();
-  delay(20);
-  setSpeed(DEFAULT_SPEED);
-  robot.Turn_Right();
-  motionState = TURNING_RIGHT;
-  turnEndMs = millis() + TURN_90_MS;
-}
-
-void updateTurn() {
-  if (motionState != TURNING_RIGHT) {
-    return;
-  }
-
-  if ((long)(millis() - turnEndMs) >= 0) {
-    robot.Stop();
-    motionState = STOPPED;
-    settleEndMs = millis() + POST_TURN_SETTLE_MS;
-    Serial.println("Turn complete: checking distance before moving");
-  }
-}
-
-void handleIrCommand() {
-  int key = IRreceive.getKey();
-  if (key == -1) {
-    return;
-  }
-
-  unsigned long now = millis();
-  if (now - lastIrCommandMs < IR_COMMAND_COOLDOWN_MS) {
-    return;
-  }
-  lastIrCommandMs = now;
-
-  Serial.print("IR key: ");
-  Serial.println(key);
-
-  if (key == START_STOP_KEY) {
-    running = !running;
-    if (running) {
-      Serial.println("Autonomous mode: started");
-    } else {
-      stopRobot();
-      Serial.println("Autonomous mode: stopped");
-    }
-  } else if (key == SERVO_KEY) {
-    servoOpen = !servoOpen;
-    servo.write(servoOpen ? SERVO_OPEN_ANGLE : SERVO_CLOSED_ANGLE);
-    Serial.println(servoOpen ? "Servo: open" : "Servo: closed");
-  }
-}
-
+/**
+ * Initialization
+ * Runs once at startup to configure the robot and communications
+ */
 void setup() {
-  pinMode(ECHO_PIN, INPUT);
-  pinMode(TRIG_PIN, OUTPUT);
-
-  Serial.begin(9600);
-  robot.Init();
-  servo.attach(SERVO_PIN);
-  servo.write(SERVO_CLOSED_ANGLE);
-  setSpeed(DEFAULT_SPEED);
-  delay(1000);
+  robot.Init();                     // Initialize robot (LEDs off, motors stopped)
+  Serial.begin(9600);               // Start serial communication for debugging
+  
+  // Initialize gripper servo
+  gripper.attach(SERVO_PIN);        // Attach servo to pin 9
+  gripper.write(SERVO_CLOSED_ANGLE); // Start with gripper closed
+  isGripperOpen = false;
+  
+  delay(2000);                      // Wait for systems to stabilize
+  
+  Serial.println("Robot initialized: Motors + Gripper ready");
 }
 
-void loop() {
-  handleIrCommand();
-  updateTurn();
-
-  if (!running) {
-    stopRobot();
+/**
+ * Toggle Gripper Open/Close
+ */
+void toggleGripper() {
+  unsigned long now = millis();
+  
+  // Prevent rapid successive commands
+  if (now - lastServoMoveMs < SERVO_TRANSITION_MS) {
     return;
   }
-
-  if (motionState == TURNING_RIGHT || (long)(millis() - settleEndMs) < 0) {
-    return;
-  }
-
-  if (millis() - lastDistanceCheckMs < DISTANCE_CHECK_MS) {
-    return;
-  }
-  lastDistanceCheckMs = millis();
-
-  uint16_t distanceCm = getDistanceCm();
-  bool obstacleNearby = distanceCm <= OBSTACLE_DISTANCE_CM;
-
-  logDistance(distanceCm, obstacleNearby);
-
-  if (obstacleNearby) {
-    startRightTurn();
+  
+  lastServoMoveMs = now;
+  isGripperOpen = !isGripperOpen;
+  
+  if (isGripperOpen) {
+    gripper.write(SERVO_OPEN_ANGLE);
+    Serial.println("Gripper: OPENED");
   } else {
-    moveForward();
+    gripper.write(SERVO_CLOSED_ANGLE);
+    Serial.println("Gripper: CLOSED");
+  }
+}
+
+/**
+ * Open Gripper (separate command)
+ */
+void openGripper() {
+  unsigned long now = millis();
+  
+  if (now - lastServoMoveMs < SERVO_TRANSITION_MS || isGripperOpen) {
+    return;
+  }
+  
+  lastServoMoveMs = now;
+  isGripperOpen = true;
+  gripper.write(SERVO_OPEN_ANGLE);
+  Serial.println("Gripper: OPENED");
+}
+
+/**
+ * Close Gripper (separate command)
+ */
+void closeGripper() {
+  unsigned long now = millis();
+  
+  if (now - lastServoMoveMs < SERVO_TRANSITION_MS || !isGripperOpen) {
+    return;
+  }
+  
+  lastServoMoveMs = now;
+  isGripperOpen = false;
+  gripper.write(SERVO_CLOSED_ANGLE);
+  Serial.println("Gripper: CLOSED");
+}
+
+/**
+ * Main Loop
+ * Continuously monitors IR remote input and executes corresponding motor commands
+ * 
+ * IR Remote Button Mapping (Standard RC Layout):
+ *   ↑ (22)  | ↖ (13)      
+ *   ← (12) | OK (64) | → (24)
+ *   ↓ (25)      
+ *   Additional:
+ *   22 = Servo toggle / Open
+ *   28 = Close gripper (optional)
+ *   90 = Open gripper (optional)
+ */
+void loop() {
+  // Read IR remote button press
+  int key = IRreceive.getKey();
+  
+  // Optional: Log received IR codes for debugging
+  if (key != -1) {
+    Serial.print("IR Key: ");
+    Serial.println(key);
+  }
+
+  // Execute motor command based on IR button pressed
+  switch (key) {
+    // ─── Forward Movement ──────────────────────────────────────────────────
+    case 22:  // UP arrow → Move forward
+      robot.Motor_Upper_L(1, LEFT_SPEED);   
+      robot.Motor_Lower_L(1, LEFT_SPEED);   
+      robot.Motor_Upper_R(1, RIGHT_SPEED);   
+      robot.Motor_Lower_R(1, RIGHT_SPEED);   
+      break;
+      
+    // ─── Strafe / Side Movement ───────────────────────────────────────────
+    case 25:  // DOWN arrow → Strafe right
+      robot.R_Move();
+      break;
+      
+    // ─── Diagonal Movement ────────────────────────────────────────────────
+    case 13:  // UP-RIGHT diagonal → Move forward-right
+      robot.RU_Move();
+      break;
+      
+    // ─── Rotation ──────────────────────────────────────────────────────────
+    case 12:  // LEFT arrow → Rotate left (right motors forward, left motors off)
+      robot.Motor_Upper_R(0, 0);
+      robot.Motor_Lower_R(0, 0);
+      robot.Motor_Upper_L(1, DEFAULT_SPEED);
+      robot.Motor_Lower_L(1, DEFAULT_SPEED);
+      break;
+      
+    // ─── Circular Motion ──────────────────────────────────────────────────
+    case 24:  // RIGHT → Circular motion
+      robot.Motor_Upper_L(1, DEFAULT_SPEED);
+      robot.Motor_Lower_L(1, DEFAULT_SPEED);
+      robot.Motor_Upper_R(0, DEFAULT_SPEED);
+      robot.Motor_Lower_R(0, DEFAULT_SPEED);
+      break;
+      
+    case 94:  // Reverse circular motion
+      robot.Motor_Lower_L(0, 0);
+      robot.Motor_Lower_R(0, 0);
+      robot.Motor_Upper_L(1, DEFAULT_SPEED);
+      robot.Motor_Upper_R(0, DEFAULT_SPEED);
+      break;
+      
+    // ─── LED Control ──────────────────────────────────────────────────────
+    case 8:  // Toggle lights button
+      isLedOn = !isLedOn;
+      robot.right_led(isLedOn);
+      robot.left_led(isLedOn);
+      Serial.println(isLedOn ? "LEDs: ON" : "LEDs: OFF");
+      break;
+      
+    // ─── Gripper Control ──────────────────────────────────────────────────
+    // Option 1: Toggle with single key
+    case 23:  // Option: Use different key for toggle
+      toggleGripper();
+      break;
+      
+    // Option 2: Separate open/close commands
+    case 28:  // Custom key for CLOSE
+      closeGripper();
+      break;
+      
+    case 90:  // Custom key for OPEN
+      openGripper();
+      break;
+      
+    // ─── Stop ─────────────────────────────────────────────────────────────
+    case 64:  // OK button → Stop
+      robot.Stop();
+      Serial.println("Robot: STOPPED");
+      break;
   }
 }
