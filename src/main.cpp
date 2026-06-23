@@ -214,11 +214,10 @@ void robotDance() {
 }
 
 void mechanichalShiver() {
-  const uint8_t SHIVER_SPEED = 60;
-  const uint8_t POLL_MS = 2;
-  const uint16_t CORRECT_MS = 60;
-  const uint16_t HUNT_MS = 100;
-  const uint8_t SHIVER_PULSE = 20;
+  const uint8_t SHIVER_SPEED = 40;
+  const uint16_t SHIVER_PULSE_MS = 15;
+  const uint16_t CORRECT_MS = 40;
+  const uint16_t HUNT_MS = 80;
   const uint8_t FLUSH_EVERY = 50;
 
   static uint8_t callCount = 0;
@@ -241,13 +240,13 @@ void mechanichalShiver() {
 
   if (sm) {
     robot.Turn_Left();
-    for (uint8_t t = 0; t < SHIVER_PULSE; t += POLL_MS) {
-      delay(POLL_MS);
+    unsigned long start = millis();
+    while (millis() - start < SHIVER_PULSE_MS) {
       if (digitalRead(SensorMiddle) != LOW) break;
     }
     robot.Turn_Right();
-    for (uint8_t t = 0; t < SHIVER_PULSE; t += POLL_MS) {
-      delay(POLL_MS);
+    start = millis();
+    while (millis() - start < SHIVER_PULSE_MS) {
       if (digitalRead(SensorMiddle) != LOW) break;
     }
     robot.Stop();
@@ -256,8 +255,8 @@ void mechanichalShiver() {
 
   if (sl) {
     robot.Turn_Right();
-    for (uint16_t t = 0; t < CORRECT_MS; t += POLL_MS) {
-      delay(POLL_MS);
+    unsigned long start = millis();
+    while (millis() - start < CORRECT_MS) {
       if (digitalRead(SensorMiddle) == LOW) break;
     }
     robot.Stop();
@@ -266,8 +265,8 @@ void mechanichalShiver() {
 
   if (sr) {
     robot.Turn_Left();
-    for (uint16_t t = 0; t < CORRECT_MS; t += POLL_MS) {
-      delay(POLL_MS);
+    unsigned long start = millis();
+    while (millis() - start < CORRECT_MS) {
       if (digitalRead(SensorMiddle) == LOW) break;
     }
     robot.Stop();
@@ -275,13 +274,13 @@ void mechanichalShiver() {
   }
 
   robot.Turn_Left();
-  for (uint16_t t = 0; t < HUNT_MS; t += POLL_MS) {
-    delay(POLL_MS);
+  unsigned long start = millis();
+  while (millis() - start < HUNT_MS) {
     if (digitalRead(SensorLeft) == LOW || digitalRead(SensorMiddle) == LOW || digitalRead(SensorRight) == LOW) break;
   }
   robot.Turn_Right();
-  for (uint16_t t = 0; t < HUNT_MS; t += POLL_MS) {
-    delay(POLL_MS);
+  start = millis();
+  while (millis() - start < HUNT_MS) {
     if (digitalRead(SensorLeft) == LOW || digitalRead(SensorMiddle) == LOW || digitalRead(SensorRight) == LOW) break;
   }
   robot.Stop();
