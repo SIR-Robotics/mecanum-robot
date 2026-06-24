@@ -301,6 +301,39 @@ uint16_t readUltrasonic() {
   return duration / 58.2;
 }
 
+// ── Line follow with ultrasonic obstacle stop ─────────────────────────────
+
+void followLineWithDistance () {
+  Serial.println("Following line with distance check...");
+
+  while (true) {
+    uint16_t dist = readUltrasonic();
+    if (dist <= 15) {
+      robot.Stop();
+      Serial.print("Obstacle detected at ");
+      Serial.print(dist);
+      Serial.println(" cm. Stopping.");
+      return;
+    }
+
+    uint8_t sl = digitalRead(LINE_LEFT_PIN);
+    uint8_t sm = digitalRead(LINE_MIDDLE_PIN);
+    uint8_t sr = digitalRead(LINE_RIGHT_PIN);
+
+    bool allBlack = (sl == 1 && sm == 1 && sr == 1);
+
+    if (allBlack) {
+      speed_Upper_L = speed_Lower_L = LEFT_SPEED;
+      speed_Upper_R = speed_Lower_R = RIGHT_SPEED;
+      robot.Advance();
+      delay(CROSS_DRIVE_MS);
+      continue;
+    }
+
+    followLine(sl, sm, sr);
+  }
+}
+
 void setup() {
   pinMode(LINE_LEFT_PIN,   INPUT);
   pinMode(LINE_MIDDLE_PIN, INPUT);
@@ -357,6 +390,14 @@ void loop() {
   // challenge 3
 
   if (key == 13) {
+    followLineWithDistance();
+    // followLineWithTarget(4);
+    // followLine();
+  }
+
+
+  // Test for color sensor
+  if (key == 12) {
     Serial.println("Reading color...");
     while (IRreceive.getKey() != 70) {
       readColor();
