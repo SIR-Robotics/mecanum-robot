@@ -1,9 +1,11 @@
 #include <Arduino.h>
 #include <MecanumCar_v2.h>
 #include "ir.h"
+#include <Servo.h>
 
 mecanumCar robot(3, 2);
 IR IRreceive(A3);
+Servo servo;
 
 const uint8_t LINE_LEFT_PIN   = A0;
 const uint8_t LINE_MIDDLE_PIN = A1;
@@ -13,6 +15,13 @@ const uint8_t LINE_RIGHT_PIN  = A2;
 const uint8_t CS_S2  = 7;
 const uint8_t CS_S3  = 6;
 const uint8_t CS_OUT = 8;
+
+// Ultrasonic Sensor Pin
+const uint8_t ECHO_PIN = 13;
+const uint8_t TRIG_PIN = 12;
+
+// Servo Pin
+const uint8_t SERVO_PIN = 9;
 
 const uint8_t  CORRECTION_SPEED     = 65;
 const uint8_t  TARGET_LINES         = 4;
@@ -266,6 +275,18 @@ void rotate180() {
   robot.Stop();
 }
 
+// ── Servo Gripper ─────────────────────────────────────────────────────────
+
+void openGripper(bool state) {
+  if (state) {
+    servo.write(180);
+    Serial.println("Gripper: open");
+  } else {
+    servo.write(0);
+    Serial.println("Gripper: closed");
+  }
+}
+
 void setup() {
   pinMode(LINE_LEFT_PIN,   INPUT);
   pinMode(LINE_MIDDLE_PIN, INPUT);
@@ -276,6 +297,8 @@ void setup() {
 
   Serial.begin(9600);
   robot.Init();
+  servo.attach(SERVO_PIN);
+  servo.write(0);
   delay(1000);
   Serial.println("Ready. Press IR to start.");
 }
@@ -324,6 +347,13 @@ void loop() {
       delay(500);
     }
     Serial.println("Color read stopped.");
+  }
+
+  // Button to test out code
+  if (key == 82) {
+    static bool gripperOpen = false;
+    gripperOpen = !gripperOpen;
+    openGripper(gripperOpen);
   }
 
   // stop everything
