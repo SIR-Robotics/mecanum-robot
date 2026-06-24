@@ -21,6 +21,7 @@ const uint16_t CROSS_PAUSE_MS       = 200;
 
 unsigned long crossingStartMs = 0;
 int           numLines        = 0;
+uint8_t       targetLines     = TARGET_LINES;
 bool          isRunning       = false;
 bool          wasOnFullLine   = false;
 bool          isCrossing      = false;
@@ -37,6 +38,13 @@ void turnRight90() {
   robot.Stop();
   robot.L_Move();
   delay(400);
+  robot.Stop();
+}
+
+void strafeLeft(int ms) {
+  speed_Upper_L = speed_Lower_L = speed_Upper_R = speed_Lower_R = CORRECTION_SPEED;
+  robot.L_Move();
+  delay(ms);
   robot.Stop();
 }
 
@@ -96,7 +104,7 @@ void followLine(uint8_t sl, uint8_t sm, uint8_t sr) {
   }
 }
 
-// ── Full line-follow with crossing counting + target stop ────────────────────
+// ── Non-blocking line-follow with crossing counting (called from loop) ──────
 
 void handleLineTracking() {
   uint8_t sl = digitalRead(LINE_LEFT_PIN);
@@ -128,7 +136,7 @@ void handleLineTracking() {
       Serial.print("Full line crossed! Count: ");
       Serial.println(numLines);
 
-      if (numLines >= TARGET_LINES) {
+      if (numLines >= targetLines) {
         robot.Stop();
         delay(200);
         turnRight90();
@@ -152,7 +160,73 @@ void handleLineTracking() {
   followLine(sl, sm, sr);
 }
 
+// ── Blocking line-follow with parameterized target ───────────────────────────
+
+void followLineWithTarget(int targetCount) {
+  numLines      = 0;
+  wasOnFullLine = false;
+  isCrossing    = false;
+
+  while (numLines < targetCount) {
+    uint8_t sl = digitalRead(LINE_LEFT_PIN);
+    uint8_t sm = digitalRead(LINE_MIDDLE_PIN);
+    uint8_t sr = digitalRead(LINE_RIGHT_PIN);
+
+    bool allBlack = (sl == 1 && sm == 1 && sr == 1);
+
+    // ── Non-blocking crossing drive-through ───────────────────────────────
+    if (isCrossing) {
+      if (millis() - crossingStartMs < CROSS_DRIVE_MS) {
+        speed_Upper_L = speed_Lower_L = LEFT_SPEED;
+        speed_Upper_R = speed_Lower_R = RIGHT_SPEED;
+        robot.Advance();
+      } else if (millis() - crossingStartMs < CROSS_DRIVE_MS + CROSS_PAUSE_MS) {
+        robot.Stop();
+      } else {
+        isCrossing = false;
+      }
+      continue;
+    }
+
+    // ── Full line crossing ────────────────────────────────────────────────
+    if (allBlack) {
+      if (!wasOnFullLine) {
+        numLines++;
+        wasOnFullLine = true;
+
+        Serial.print("Line crossed: ");
+        Serial.print(numLines);
+        Serial.print("/");
+        Serial.println(targetCount);
+
+        if (numLines >= targetCount) {
+          robot.Stop();
+          Serial.println("Target reached.");
+          return;
+        }
+
+        isCrossing      = true;
+        crossingStartMs = millis();
+        speed_Upper_L = speed_Lower_L = LEFT_SPEED;
+        speed_Upper_R = speed_Lower_R = RIGHT_SPEED;
+        robot.Advance();
+      }
+      continue;
+    }
+
+    // ── Delegate movement to pure line-follow ─────────────────────────────
+    followLine(sl, sm, sr);
+  }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
+
+void rotate180() {
+  speed_Upper_L = speed_Lower_L = speed_Upper_R = speed_Lower_R = CORRECTION_SPEED;
+  robot.Turn_Right();
+  delay(1000);
+  robot.Stop();
+}
 
 void setup() {
   pinMode(LINE_LEFT_PIN,   INPUT);
@@ -168,7 +242,8 @@ void setup() {
 void loop() {
   int key = IRreceive.getKey();
 
-  if (key != -1 && !isRunning) {
+  // challenge 1
+  if (key == 22) {
     numLines      = 0;
     wasOnFullLine = false;
     isCrossing    = false;
@@ -176,7 +251,36 @@ void loop() {
     robot.right_led(false);
     robot.left_led(false);
     Serial.println("Program started!");
+
+    while (isRunning) handleLineTracking();
+
+    robot.right_led(true);
+    robot.left_led(true);
+    Serial.println("Challenge 1 done.");
   }
 
-  if (isRunning) handleLineTracking();
+  // challenge 2
+  if (key == 25) {
+    robot.right_led(false);
+    robot.left_led(false);
+    Serial.println("Following 2 lines...");
+    followLineWithTarget(2);
+    strafeLeft(1000);
+    followLineWithTarget(4);
+    rotate180();
+    followLineWithTarget(3);
+    robot.right_led(true);
+    robot.left_led(true);
+    Serial.println("Done.");
+  }
+
+  // stop everything
+  if (key == 70) {
+    robot.Stop();
+    isRunning   = false;
+    isCrossing  = false;
+    robot.right_led(false);
+    robot.left_led(false);
+    Serial.println("Stopped.");
+  }
 }
