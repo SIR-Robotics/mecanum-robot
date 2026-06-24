@@ -9,6 +9,11 @@ const uint8_t LINE_LEFT_PIN   = A0;
 const uint8_t LINE_MIDDLE_PIN = A1;
 const uint8_t LINE_RIGHT_PIN  = A2;
 
+// Color Sensor TCS3200 (S0=GND, S1=5V, scaling=2%)
+const uint8_t CS_S2  = 7;
+const uint8_t CS_S3  = 6;
+const uint8_t CS_OUT = 8;
+
 const uint8_t  CORRECTION_SPEED     = 65;
 const uint8_t  TARGET_LINES         = 4;
 const uint8_t  LEFT_SPEED           = 45;
@@ -19,12 +24,45 @@ const uint16_t HUNT_DURATION_MS     = 60;
 const uint16_t CROSS_DRIVE_MS       = 800;
 const uint16_t CROSS_PAUSE_MS       = 200;
 
+// Color sensor calibration (white=255, black=0)
+int whiteR = 949, whiteG = 967, whiteB = 881;
+int blackR = 5109, blackG = 4806, blackB = 4189;
+
 unsigned long crossingStartMs = 0;
 int           numLines        = 0;
 uint8_t       targetLines     = TARGET_LINES;
 bool          isRunning       = false;
 bool          wasOnFullLine   = false;
 bool          isCrossing      = false;
+
+// ── Color Sensor ──────────────────────────────────────────────────────────────
+
+struct RGB { uint8_t r, g, b; };
+
+// Read raw pulse width (µs) for given photodiode filter
+int readRawColor(bool s2, bool s3) {
+  digitalWrite(CS_S2, s2);
+  digitalWrite(CS_S3, s3);
+  delay(10);  // Let filter settle
+  return pulseIn(CS_OUT, LOW, 100000);
+}
+
+// Read normalized RGB (0-255) using calibration values
+RGB readColor() {
+  int rawR = readRawColor(LOW,  LOW);
+  int rawG = readRawColor(HIGH, HIGH);
+  int rawB = readRawColor(LOW,  HIGH);
+
+  RGB c;
+  c.r = constrain(map(rawR, blackR, whiteR, 0, 255), 0, 255);
+  c.g = constrain(map(rawG, blackG, whiteG, 0, 255), 0, 255);
+  c.b = constrain(map(rawB, blackB, whiteB, 0, 255), 0, 255);
+
+  Serial.print("R: "); Serial.print(c.r);
+  Serial.print(" G: "); Serial.print(c.g);
+  Serial.print(" B: "); Serial.println(c.b);
+  return c;
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -232,6 +270,9 @@ void setup() {
   pinMode(LINE_LEFT_PIN,   INPUT);
   pinMode(LINE_MIDDLE_PIN, INPUT);
   pinMode(LINE_RIGHT_PIN,  INPUT);
+  pinMode(CS_S2,  OUTPUT);
+  pinMode(CS_S3,  OUTPUT);
+  pinMode(CS_OUT, INPUT);
 
   Serial.begin(9600);
   robot.Init();
@@ -272,6 +313,17 @@ void loop() {
     robot.right_led(true);
     robot.left_led(true);
     Serial.println("Done.");
+  }
+
+  // challenge 3
+
+  if (key == 13) {
+    Serial.println("Reading color...");
+    while (IRreceive.getKey() != 70) {
+      readColor();
+      delay(500);
+    }
+    Serial.println("Color read stopped.");
   }
 
   // stop everything
