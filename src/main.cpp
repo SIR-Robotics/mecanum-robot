@@ -42,58 +42,13 @@ void turnRight90() {
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-void handleLineTracking() {
-  uint8_t sl = digitalRead(LINE_LEFT_PIN);
-  uint8_t sm = digitalRead(LINE_MIDDLE_PIN);
-  uint8_t sr = digitalRead(LINE_RIGHT_PIN);
+// ── Pure line-follow movement. Handles: allWhite hunt, normal tracking. ──────
+// Caller passes pre-read sensor values from handleLineTracking.
 
-  bool allBlack = (sl == 1 && sm == 1 && sr == 1);
+void followLine(uint8_t sl, uint8_t sm, uint8_t sr) {
   bool allWhite = (sl == 0 && sm == 0 && sr == 0);
 
-  // ── Non-blocking crossing drive-through ───────────────────────────────────
-  if (isCrossing) {
-    if (millis() - crossingStartMs < CROSS_DRIVE_MS) {
-      speed_Upper_L = speed_Lower_L = LEFT_SPEED;
-      speed_Upper_R = speed_Lower_R = RIGHT_SPEED;
-      robot.Advance();
-    } else if (millis() - crossingStartMs < CROSS_DRIVE_MS + CROSS_PAUSE_MS) {
-      robot.Stop();
-    } else {
-      isCrossing = false;
-    }
-    return;
-  }
-
-  // ── Full line crossing ────────────────────────────────────────────────────
-  if (allBlack) {
-    if (!wasOnFullLine) {
-      numLines++;
-      wasOnFullLine = true;
-
-      Serial.print("Full line crossed! Count: ");
-      Serial.println(numLines);
-
-      if (numLines >= TARGET_LINES) {
-        robot.Stop();
-        delay(200);
-        turnRight90();
-        isRunning = false;
-        robot.right_led(true);
-        robot.left_led(true);
-        Serial.println("Target reached. Robot stopped.");
-        return;
-      }
-
-      isCrossing      = true;
-      crossingStartMs = millis();
-      speed_Upper_L = speed_Lower_L = LEFT_SPEED;
-      speed_Upper_R = speed_Lower_R = RIGHT_SPEED;
-      robot.Advance();
-    }
-    return;
-  }
-
-  // ── Lost line → nudge + hunt (inlined sensor re-check, like mechanichalShiver)
+  // ── Lost line → nudge + hunt (inlined sensor re-check) ──────────────────
   if (allWhite) {
     wasOnFullLine = false;
 
@@ -124,7 +79,7 @@ void handleLineTracking() {
     return;
   }
 
-  // ── Normal tracking ───────────────────────────────────────────────────────
+  // ── Normal tracking ─────────────────────────────────────────────────────
   wasOnFullLine = false;
 
   if (sm == 1 && sl == 0 && sr == 0) {
@@ -139,6 +94,62 @@ void handleLineTracking() {
       robot.Turn_Right();
     }
   }
+}
+
+// ── Full line-follow with crossing counting + target stop ────────────────────
+
+void handleLineTracking() {
+  uint8_t sl = digitalRead(LINE_LEFT_PIN);
+  uint8_t sm = digitalRead(LINE_MIDDLE_PIN);
+  uint8_t sr = digitalRead(LINE_RIGHT_PIN);
+
+  bool allBlack = (sl == 1 && sm == 1 && sr == 1);
+
+  // ── Non-blocking crossing drive-through ─────────────────────────────────
+  if (isCrossing) {
+    if (millis() - crossingStartMs < CROSS_DRIVE_MS) {
+      speed_Upper_L = speed_Lower_L = LEFT_SPEED;
+      speed_Upper_R = speed_Lower_R = RIGHT_SPEED;
+      robot.Advance();
+    } else if (millis() - crossingStartMs < CROSS_DRIVE_MS + CROSS_PAUSE_MS) {
+      robot.Stop();
+    } else {
+      isCrossing = false;
+    }
+    return;
+  }
+
+  // ── Full line crossing ──────────────────────────────────────────────────
+  if (allBlack) {
+    if (!wasOnFullLine) {
+      numLines++;
+      wasOnFullLine = true;
+
+      Serial.print("Full line crossed! Count: ");
+      Serial.println(numLines);
+
+      if (numLines >= TARGET_LINES) {
+        robot.Stop();
+        delay(200);
+        turnRight90();
+        isRunning = false;
+        robot.right_led(true);
+        robot.left_led(true);
+        Serial.println("Target reached. Robot stopped.");
+        return;
+      }
+
+      isCrossing      = true;
+      crossingStartMs = millis();
+      speed_Upper_L = speed_Lower_L = LEFT_SPEED;
+      speed_Upper_R = speed_Lower_R = RIGHT_SPEED;
+      robot.Advance();
+    }
+    return;
+  }
+
+  // ── Delegate movement to pure line-follow ───────────────────────────────
+  followLine(sl, sm, sr);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
