@@ -287,6 +287,20 @@ void openGripper(bool state) {
   }
 }
 
+// ── Ultrasonic Sensor ─────────────────────────────────────────────────────
+
+uint16_t readUltrasonic() {
+  digitalWrite(TRIG_PIN, LOW);
+  delayMicroseconds(2);
+  digitalWrite(TRIG_PIN, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(TRIG_PIN, LOW);
+
+  unsigned long duration = pulseIn(ECHO_PIN, HIGH, 12000UL);
+  if (duration == 0) return 999;
+  return duration / 58.2;
+}
+
 void setup() {
   pinMode(LINE_LEFT_PIN,   INPUT);
   pinMode(LINE_MIDDLE_PIN, INPUT);
@@ -294,6 +308,8 @@ void setup() {
   pinMode(CS_S2,  OUTPUT);
   pinMode(CS_S3,  OUTPUT);
   pinMode(CS_OUT, INPUT);
+  pinMode(ECHO_PIN, INPUT);
+  pinMode(TRIG_PIN, OUTPUT);
 
   Serial.begin(9600);
   robot.Init();
@@ -349,11 +365,28 @@ void loop() {
     Serial.println("Color read stopped.");
   }
 
-  // Button to test out code
+  // Button to test out code - gripper
   if (key == 82) {
     static bool gripperOpen = false;
     gripperOpen = !gripperOpen;
     openGripper(gripperOpen);
+  }
+
+  // Test for ultrasonic sensor
+  if (key == 74) {
+    Serial.println("Ultrasonic reading started...");
+    while (IRreceive.getKey() != 70) {
+      uint16_t dist = readUltrasonic();
+      if (dist >= 999)
+        Serial.println("Distance: out of range");
+      else {
+        Serial.print("Distance: ");
+        Serial.print(dist);
+        Serial.println(" cm");
+      }
+      delay(250);
+    }
+    Serial.println("Ultrasonic stopped.");
   }
 
   // stop everything
