@@ -24,17 +24,18 @@ const uint8_t TRIG_PIN = 12;
 // Servo Pin
 const uint8_t SERVO_PIN = 9;
 
-const uint8_t  CORRECTION_SPEED     = 45;
-const uint8_t  TARGET_LINES         = 4;
+const uint8_t  TURNING_SPEED        = 45;
+const uint8_t  CORRECTION_SPEED     = 30;
+const uint8_t  TARGET_LINES         = 7;
 const uint8_t  LEFT_SPEED           = 45;
 const uint8_t  RIGHT_SPEED          = 45;
-const uint8_t  NUDGE_SPEED          = 40;
-const uint16_t NUDGE_DURATION_MS    = 20;
+const uint8_t  NUDGE_SPEED          = 25;
+const uint16_t NUDGE_DURATION_MS    = 15;
 const uint16_t HUNT_DURATION_MS     = 200;
 const uint16_t CROSS_DRIVE_MS       = 500;
 const uint16_t CROSS_PAUSE_MS       = 200;
-const uint16_t OBSTACLE_DISTANCE_CM = 15;
-const uint16_t ULTRASONIC_SAMPLE_MS = 60;
+const uint16_t OBSTACLE_DISTANCE_CM = 8;
+const uint16_t ULTRASONIC_SAMPLE_MS = 50;
 const uint32_t ULTRASONIC_TIMEOUT_US = 12000;
 
 // Color sensor calibration (white=255, black=0)
@@ -96,7 +97,7 @@ RGB readColor() {
 
 void turnRight90() {
   Serial.println("Turning right 90 degrees...");
-  speed_Upper_L = speed_Lower_L = speed_Upper_R = speed_Lower_R = CORRECTION_SPEED;
+  speed_Upper_L = speed_Lower_L = speed_Upper_R = speed_Lower_R = TURNING_SPEED;
   robot.Advance();
   delay(300);
   robot.Turn_Right();
@@ -116,76 +117,28 @@ void strafeLeft(int ms) {
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-// ── Pure line-follow movement. Handles: allWhite hunt, normal tracking. ──────
-// Caller passes pre-read sensor values from handleLineTracking.
-
-void followLine(uint8_t sl, uint8_t sm, uint8_t sr) {
-  bool allWhite = (sl == 0 && sm == 0 && sr == 0);
-
-  // ── Lost line → nudge + hunt (inlined sensor re-check) ──────────────────
-  if (allWhite) {
-    wasOnFullLine = false;
-
-    speed_Upper_L = speed_Lower_L = speed_Upper_R = speed_Lower_R = NUDGE_SPEED;
-
-    // Phase 1: nudge forward with inline re-check
-    unsigned long start = millis();
-    while (millis() - start < NUDGE_DURATION_MS) {
-      robot.Advance();
-      if (digitalRead(LINE_MIDDLE_PIN) == 1) { robot.Stop(); return; }
-    }
-
-    // Phase 2: hunt left
-    start = millis();
-    while (millis() - start < HUNT_DURATION_MS) {
-      robot.Turn_Left();
-      if (digitalRead(LINE_MIDDLE_PIN) == 1) { robot.Stop(); return; }
-    }
-
-    // Phase 3: hunt right
-    start = millis();
-    while (millis() - start < HUNT_DURATION_MS) {
-      robot.Turn_Right();
-      if (digitalRead(LINE_MIDDLE_PIN) == 1) { robot.Stop(); return; }
-    }
-
-    robot.Stop();
-    return;
-  }
-
-  // ── Normal tracking ─────────────────────────────────────────────────────
-  wasOnFullLine = false;
-
-  if (sm == 1 && sl == 0 && sr == 0) {
-    speed_Upper_L = speed_Lower_L = LEFT_SPEED;
-    speed_Upper_R = speed_Lower_R = RIGHT_SPEED;
-    robot.Advance();
-  } else {
-    speed_Upper_L = speed_Lower_L = speed_Upper_R = speed_Lower_R = CORRECTION_SPEED;
-    if (sl == 1 || (sm == 1 && sl == 1)) {
-      robot.Turn_Left();
-    } else {
-      robot.Turn_Right();
-    }
-  }
-}
-
 // ── Non-blocking line-follow with crossing counting (called from loop) ──────
+
+// Recovery state for handleLineTracking's all-white hunt (non-blocking)
+static uint8_t       c1RecoveryState   = 0;
+static unsigned long c1RecoveryStartMs = 0;
 
 void handleLineTracking() {
   uint8_t sl = digitalRead(LINE_LEFT_PIN);
   uint8_t sm = digitalRead(LINE_MIDDLE_PIN);
   uint8_t sr = digitalRead(LINE_RIGHT_PIN);
 
-  bool allBlack = (sl == 1 && sm == 1 && sr == 1);
+  unsigned long now      = millis();
+  bool          allBlack = (sl == 1 && sm == 1 && sr == 1);
+  bool          allWhite = (sl == 0 && sm == 0 && sr == 0);
 
   // ── Non-blocking crossing drive-through ─────────────────────────────────
   if (isCrossing) {
-    if (millis() - crossingStartMs < CROSS_DRIVE_MS) {
+    if (now - crossingStartMs < CROSS_DRIVE_MS) {
       speed_Upper_L = speed_Lower_L = LEFT_SPEED;
       speed_Upper_R = speed_Lower_R = RIGHT_SPEED;
       robot.Advance();
-    } else if (millis() - crossingStartMs < CROSS_DRIVE_MS + CROSS_PAUSE_MS) {
+    } else if (now - crossingStartMs < CROSS_DRIVE_MS + CROSS_PAUSE_MS) {
       robot.Stop();
     } else {
       isCrossing = false;
@@ -214,7 +167,7 @@ void handleLineTracking() {
       }
 
       isCrossing      = true;
-      crossingStartMs = millis();
+      crossingStartMs = now;
       speed_Upper_L = speed_Lower_L = LEFT_SPEED;
       speed_Upper_R = speed_Lower_R = RIGHT_SPEED;
       robot.Advance();
@@ -222,32 +175,81 @@ void handleLineTracking() {
     return;
   }
 
-  // ── Delegate movement to pure line-follow ───────────────────────────────
-  followLine(sl, sm, sr);
+  wasOnFullLine = false;
+
+  // ── All-white recovery (non-blocking) ───────────────────────────────────
+  if (allWhite) {
+    speed_Upper_L = speed_Lower_L = speed_Upper_R = speed_Lower_R = NUDGE_SPEED;
+
+    if (c1RecoveryState == 0) {
+      c1RecoveryState   = 1;
+      c1RecoveryStartMs = now;
+    }
+
+    if (c1RecoveryState == 1) {
+      robot.Advance();
+      if (now - c1RecoveryStartMs >= NUDGE_DURATION_MS) {
+        c1RecoveryState   = 2;
+        c1RecoveryStartMs = now;
+      }
+    } else if (c1RecoveryState == 2) {
+      robot.Turn_Left();
+      if (now - c1RecoveryStartMs >= HUNT_DURATION_MS) {
+        c1RecoveryState   = 3;
+        c1RecoveryStartMs = now;
+      }
+    } else {
+      robot.Turn_Right();
+      if (now - c1RecoveryStartMs >= HUNT_DURATION_MS) {
+        c1RecoveryState = 0;
+        robot.Stop();
+      }
+    }
+    return;
+  }
+
+  // ── Normal tracking ─────────────────────────────────────────────────────
+  c1RecoveryState = 0;
+
+  if (sm == 1 && sl == 0 && sr == 0) {
+    speed_Upper_L = speed_Lower_L = LEFT_SPEED;
+    speed_Upper_R = speed_Lower_R = RIGHT_SPEED;
+    robot.Advance();
+  } else {
+    speed_Upper_L = speed_Lower_L = speed_Upper_R = speed_Lower_R = CORRECTION_SPEED;
+    if (sl == 1 || (sm == 1 && sl == 1)) {
+      robot.Turn_Left();
+    } else {
+      robot.Turn_Right();
+    }
+  }
 }
 
 // ── Blocking line-follow with parameterized target ───────────────────────────
-
 void followLineWithTarget(int targetCount) {
-  numLines      = 0;
-  wasOnFullLine = false;
-  isCrossing    = false;
+  numLines         = 0;
+  wasOnFullLine    = false;
+  isCrossing       = false;
+  crossingStartMs  = 0;
+
+  uint8_t recoveryState    = 0;
+  unsigned long recoveryStartMs = 0;
 
   while (numLines < targetCount) {
     uint8_t sl = digitalRead(LINE_LEFT_PIN);
     uint8_t sm = digitalRead(LINE_MIDDLE_PIN);
     uint8_t sr = digitalRead(LINE_RIGHT_PIN);
 
+    unsigned long now = millis();
+    bool allWhite = (sl == 0 && sm == 0 && sr == 0);
     bool allBlack = (sl == 1 && sm == 1 && sr == 1);
 
     // ── Non-blocking crossing drive-through ───────────────────────────────
     if (isCrossing) {
-      if (millis() - crossingStartMs < CROSS_DRIVE_MS) {
+      if (now - crossingStartMs < CROSS_DRIVE_MS) {
         speed_Upper_L = speed_Lower_L = LEFT_SPEED;
         speed_Upper_R = speed_Lower_R = RIGHT_SPEED;
         robot.Advance();
-      } else if (millis() - crossingStartMs < CROSS_DRIVE_MS + CROSS_PAUSE_MS) {
-        robot.Stop();
       } else {
         isCrossing = false;
       }
@@ -272,25 +274,70 @@ void followLineWithTarget(int targetCount) {
         }
 
         isCrossing      = true;
-        crossingStartMs = millis();
-        speed_Upper_L = speed_Lower_L = LEFT_SPEED;
-        speed_Upper_R = speed_Lower_R = RIGHT_SPEED;
+        crossingStartMs = now;
+      }
+      speed_Upper_L = speed_Lower_L = LEFT_SPEED;
+      speed_Upper_R = speed_Lower_R = RIGHT_SPEED;
+      robot.Advance();
+      continue;
+    }
+
+    wasOnFullLine = false;
+
+    // ── All-white recovery ────────────────────────────────────────────────
+    if (allWhite) {
+      speed_Upper_L = speed_Lower_L = speed_Upper_R = speed_Lower_R = NUDGE_SPEED;
+
+      if (recoveryState == 0) {
+        recoveryState    = 1;
+        recoveryStartMs  = now;
+      }
+
+      if (recoveryState == 1) {
         robot.Advance();
+        if (now - recoveryStartMs >= NUDGE_DURATION_MS) {
+          recoveryState   = 2;
+          recoveryStartMs = now;
+        }
+      } else if (recoveryState == 2) {
+        robot.Turn_Left();
+        if (now - recoveryStartMs >= HUNT_DURATION_MS) {
+          recoveryState   = 3;
+          recoveryStartMs = now;
+        }
+      } else {
+        robot.Turn_Right();
+        if (now - recoveryStartMs >= HUNT_DURATION_MS) {
+          recoveryState = 0;
+          robot.Stop();
+        }
       }
       continue;
     }
 
-    // ── Delegate movement to pure line-follow ─────────────────────────────
-    followLine(sl, sm, sr);
+    // ── Normal line follow ────────────────────────────────────────────────
+    recoveryState = 0;
+    if (sm == 1 && sl == 0 && sr == 0) {
+      speed_Upper_L = speed_Lower_L = LEFT_SPEED;
+      speed_Upper_R = speed_Lower_R = RIGHT_SPEED;
+      robot.Advance();
+    } else {
+      speed_Upper_L = speed_Lower_L = speed_Upper_R = speed_Lower_R = CORRECTION_SPEED;
+      if (sl == 1 || (sm == 1 && sl == 1)) {
+        robot.Turn_Left();
+      } else {
+        robot.Turn_Right();
+      }
+    }
   }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 
 void rotate180() {
-  speed_Upper_L = speed_Lower_L = speed_Upper_R = speed_Lower_R = CORRECTION_SPEED;
+  speed_Upper_L = speed_Lower_L = speed_Upper_R = speed_Lower_R = TURNING_SPEED;
   robot.Turn_Right();
-  delay(1000);
+  delay(1875);
   robot.Stop();
 }
 
@@ -541,10 +588,11 @@ void loop() {
 
   // challenge 1
   if (key == 22) {
-    numLines      = 0;
-    wasOnFullLine = false;
-    isCrossing    = false;
-    isRunning     = true;
+    numLines        = 0;
+    wasOnFullLine   = false;
+    isCrossing      = false;
+    isRunning       = true;
+    c1RecoveryState = 0;  // reset recovery state on fresh start
     robot.right_led(false);
     robot.left_led(false);
     Serial.println("Program started!");
@@ -572,13 +620,18 @@ void loop() {
   }
 
   // challenge 3
-
   if (key == 13) {
     followLineWithDistance();
-    // followLineWithTarget(4);
-    // followLine();
+    static bool gripperOpen = true;
+    openGripper(gripperOpen);
+    delay(5000);
+    gripperOpen = !gripperOpen;
+    rotate180();
+    followLineWithTarget(7);
+    openGripper(gripperOpen);
+    delay(5000);
+    gripperOpen = !gripperOpen;
   }
-
 
   // Test for color sensor
   if (key == 12) {
