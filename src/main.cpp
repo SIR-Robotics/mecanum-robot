@@ -37,6 +37,7 @@ const uint16_t CROSS_PAUSE_MS       = 200;
 const uint16_t OBSTACLE_DISTANCE_CM = 8;
 const uint16_t ULTRASONIC_SAMPLE_MS = 50;
 const uint32_t ULTRASONIC_TIMEOUT_US = 12000;
+const uint8_t  STOP_KEY             = 64;
 
 // Color sensor calibration (white=255, black=0)
 int whiteR = 949, whiteG = 967, whiteB = 881;
@@ -48,6 +49,7 @@ uint8_t       targetLines     = TARGET_LINES;
 bool          isRunning       = false;
 bool          wasOnFullLine   = false;
 bool          isCrossing      = false;
+bool          stopAll         = false;
 
 volatile unsigned long echoRiseUs = 0;
 volatile unsigned long echoDurationUs = 0;
@@ -62,6 +64,34 @@ ISR(PCINT0_vect) {
     echoDurationReady = true;
     echoRiseUs = 0;
   }
+}
+
+void stopEverything() {
+  robot.Stop();
+  isRunning  = false;
+  isCrossing = false;
+  stopAll    = true;
+  robot.right_led(false);
+  robot.left_led(false);
+  Serial.println("Stopped.");
+}
+
+bool stopRequested() {
+  if (stopAll) return true;
+  if (IRreceive.getKey() == STOP_KEY) {
+    stopEverything();
+    return true;
+  }
+  return false;
+}
+
+bool waitOrStop(uint16_t ms) {
+  unsigned long start = millis();
+  while (millis() - start < ms) {
+    if (stopRequested()) return true;
+    delay(1);
+  }
+  return false;
 }
 
 // ── Color Sensor ──────────────────────────────────────────────────────────────
@@ -99,19 +129,19 @@ void turnRight90() {
   Serial.println("Turning right 90 degrees...");
   speed_Upper_L = speed_Lower_L = speed_Upper_R = speed_Lower_R = TURNING_SPEED;
   robot.Advance();
-  delay(300);
+  if (waitOrStop(300)) return;
   robot.Turn_Right();
-  delay(500);
+  if (waitOrStop(500)) return;
   robot.Stop();
   robot.L_Move();
-  delay(400);
+  if (waitOrStop(400)) return;
   robot.Stop();
 }
 
 void strafeLeft(int ms) {
   speed_Upper_L = speed_Lower_L = speed_Upper_R = speed_Lower_R = CORRECTION_SPEED;
   robot.L_Move();
-  delay(ms);
+  if (waitOrStop(ms)) return;
   robot.Stop();
 }
 
@@ -157,8 +187,9 @@ void handleLineTracking() {
 
       if (numLines >= targetLines) {
         robot.Stop();
-        delay(200);
+        if (waitOrStop(200)) return;
         turnRight90();
+        if (stopAll) return;
         isRunning = false;
         robot.right_led(true);
         robot.left_led(true);
@@ -235,7 +266,7 @@ void followLineWithTarget(int targetCount) {
   uint8_t recoveryState    = 0;
   unsigned long recoveryStartMs = 0;
 
-  while (numLines < targetCount) {
+  while (numLines < targetCount && !stopRequested()) {
     uint8_t sl = digitalRead(LINE_LEFT_PIN);
     uint8_t sm = digitalRead(LINE_MIDDLE_PIN);
     uint8_t sr = digitalRead(LINE_RIGHT_PIN);
@@ -337,7 +368,7 @@ void followLineWithTarget(int targetCount) {
 void rotate180() {
   speed_Upper_L = speed_Lower_L = speed_Upper_R = speed_Lower_R = TURNING_SPEED;
   robot.Turn_Right();
-  delay(1875);
+  if (waitOrStop(1875)) return;
   robot.Stop();
 }
 
@@ -461,6 +492,8 @@ void followLineWithDistance () {
   unsigned long lastDistanceReportMs = millis() - 250;
 
   while (true) {
+    if (stopRequested()) return;
+
     updateUltrasonic(ultrasonic);
     if (ultrasonic.sampleReady) {
       unsigned long now = millis();
@@ -585,9 +618,19 @@ void setup() {
 
 void loop() {
   int key = IRreceive.getKey();
+  if (key != -1) {
+    Serial.print("IR: ");
+    Serial.println(key);
+  }
+
+  if (key == STOP_KEY) {
+    stopEverything();
+    return;
+  }
 
   // challenge 1
   if (key == 22) {
+    stopAll         = false;
     numLines        = 0;
     wasOnFullLine   = false;
     isCrossing      = false;
@@ -597,7 +640,8 @@ void loop() {
     robot.left_led(false);
     Serial.println("Program started!");
 
-    while (isRunning) handleLineTracking();
+    while (isRunning && !stopRequested()) handleLineTracking();
+    if (stopAll) return;
 
     robot.right_led(true);
     robot.left_led(true);
@@ -606,14 +650,20 @@ void loop() {
 
   // challenge 2
   if (key == 25) {
+    stopAll = false;
     robot.right_led(false);
     robot.left_led(false);
     Serial.println("Following 2 lines...");
     followLineWithTarget(2);
+    if (stopAll) return;
     strafeLeft(1000);
+    if (stopAll) return;
     followLineWithTarget(4);
+    if (stopAll) return;
     rotate180();
+    if (stopAll) return;
     followLineWithTarget(3);
+    if (stopAll) return;
     robot.right_led(true);
     robot.left_led(true);
     Serial.println("Done.");
@@ -621,24 +671,28 @@ void loop() {
 
   // challenge 3
   if (key == 13) {
+    stopAll = false;
     followLineWithDistance();
     static bool gripperOpen = true;
     openGripper(gripperOpen);
-    delay(5000);
+    if (waitOrStop(5000)) return;
     gripperOpen = !gripperOpen;
     rotate180();
+    if (stopAll) return;
     followLineWithTarget(7);
+    if (stopAll) return;
     openGripper(gripperOpen);
-    delay(5000);
+    if (waitOrStop(5000)) return;
     gripperOpen = !gripperOpen;
   }
 
   // Test for color sensor
   if (key == 12) {
+    stopAll = false;
     Serial.println("Reading color...");
-    while (IRreceive.getKey() != 70) {
+    while (!stopRequested()) {
       readColor();
-      delay(500);
+      if (waitOrStop(500)) break;
     }
     Serial.println("Color read stopped.");
   }
@@ -652,8 +706,9 @@ void loop() {
 
   // Test for ultrasonic sensor
   if (key == 74) {
+    stopAll = false;
     Serial.println("Ultrasonic reading started...");
-    while (IRreceive.getKey() != 70) {
+    while (!stopRequested()) {
       uint16_t dist = readUltrasonic();
       if (dist >= 999)
         Serial.println("Distance: out of range");
@@ -662,18 +717,8 @@ void loop() {
         Serial.print(dist);
         Serial.println(" cm");
       }
-      delay(250);
+      if (waitOrStop(250)) break;
     }
     Serial.println("Ultrasonic stopped.");
-  }
-
-  // stop everything
-  if (key == 70) {
-    robot.Stop();
-    isRunning   = false;
-    isCrossing  = false;
-    robot.right_led(false);
-    robot.left_led(false);
-    Serial.println("Stopped.");
   }
 }

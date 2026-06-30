@@ -16,36 +16,37 @@ IR::IR(int p){
 }
 /////////////////////////////////////////////////////////
 boolean IR::IRStart(void){
-  int t = 0;
-  //读取脉冲高电平和低电平，9ms低电平+4.5ms高电平
-  if(digitalRead(pin_)==LOW){
-    while(digitalRead(pin_)==LOW && t<190){   //标准为9000us
-      delayMicroseconds(50);
-      t++;
-    }
+  if (digitalRead(pin_) == HIGH) return false;
+
+  unsigned long start = micros();
+  while (digitalRead(pin_) == LOW) {
+    if (micros() - start > 12000) return false;
   }
-  if(t > 170 && t < 190){   //判断脉冲是否为代表1, 标准为180
-    //Serial.println(t);
-    return true;  
-  }    
-  else
-    return false;	
+
+  unsigned long lowUs = micros() - start;
+  if (lowUs < 4000 || lowUs > 10000) return false;
+
+  start = micros();
+  while (digitalRead(pin_) == HIGH) {
+    if (micros() - start > 6000) return false;
+  }
+  return true;
 }
 /////////////////////////////////////////////////////////
 int IR::getByte(void){  //接收32位红外数据（地址、地址反码、数据、数据反码）
-    int Byte = 0; 
-    for(char i=0; i<8; i++){
-        int t = 0;
-        //读取脉冲高电平和低电平时间
-        while(digitalRead(pin_)==LOW);
-        if(digitalRead(pin_)==HIGH){
-          while(digitalRead(pin_)==HIGH && t<38){   //标准1688us
-            delayMicroseconds(50);
-            t++;
-          }
-        //Serial.println(t);
+    int Byte = 0;
+    for(uint8_t i=0; i<8; i++){
+        unsigned long start = micros();
+        while(digitalRead(pin_)==LOW) {
+          if (micros() - start > 1500) return -1;
         }
-        if(t > 20 && t < 38)   //判断脉冲是否为代表1, 标准为11--34
+
+        start = micros();
+        while(digitalRead(pin_)==HIGH) {
+          if (micros() - start > 2500) return -1;
+        }
+
+        if(micros() - start > 1000)
             Byte |= 1 << i;
     }
     return Byte;	
@@ -58,8 +59,7 @@ int IR::getKey(void){
         return -1;
     }
     else{
-        while(digitalRead(pin_)==HIGH);                     //等待起始信号4.5ms
-        for(char i=0; i<4; i++)
+        for(uint8_t i=0; i<4; i++)
                 key[i] = getByte();                                //接收32位红外数据（地址、地址反码、数据、数据反码）
         if(key[0] + key[1] == 0xff && key[2] + key[3] == 0xff)     //校验接收数据是否正确
             return key[2];
