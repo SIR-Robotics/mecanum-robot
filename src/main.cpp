@@ -3,10 +3,12 @@
 #include "ir.h"
 #include <Servo.h>
 #include <avr/interrupt.h>
+#include <SoftwareSerial.h>
 
 mecanumCar robot(3, 2);
 IR IRreceive(A3);
 Servo servo;
+SoftwareSerial espSerial(10, 11); // Uno RX, TX
 
 const uint8_t LINE_LEFT_PIN   = A0;
 const uint8_t LINE_MIDDLE_PIN = A1;
@@ -89,17 +91,6 @@ ColorLabel classifyColor() {
   return ColorLabel::Yellow;
 }
 
-// Arduino Uno D13 is PB5 / PCINT5. Capture echo edges even while driving.
-ISR(PCINT0_vect) {
-  if (PINB & _BV(PB5)) {
-    echoRiseUs = micros();
-  } else if (echoRiseUs != 0) {
-    echoDurationUs = micros() - echoRiseUs;
-    echoDurationReady = true;
-    echoRiseUs = 0;
-  }
-}
-
 // ── Color Sensor ──────────────────────────────────────────────────────────────
 
 
@@ -109,6 +100,32 @@ ISR(PCINT0_vect) {
 bool stopRequested();
 bool waitOrStop(uint16_t ms);
 void stopEverything();
+
+bool connectEsp32Wifi() {
+  Serial.println("Waiting for ESP32 WiFi...");
+
+  unsigned long startMs = millis();
+  String line;
+  while (millis() - startMs < 20000) {
+    while (espSerial.available()) {
+      char c = espSerial.read();
+      if (c == '\n') {
+        line.trim();
+        if (line.length() > 0) {
+          Serial.print("ESP32: ");
+          Serial.println(line);
+          if (line.startsWith("WIFI_CONNECTED")) return true;
+          if (line.startsWith("WIFI_FAILED")) return false;
+        }
+        line = "";
+      } else if (c != '\r') {
+        line += c;
+      }
+    }
+  }
+  Serial.println("ESP32 not responding.");
+  return false;
+}
 
 void turnRight90() {
   Serial.println("Turning right 90 degrees...");
@@ -365,16 +382,10 @@ void updateUltrasonic(UltrasonicReading &sensor) {
 void followLineWithDistance() {
   Serial.println("Following line with distance check...");
 
-  UltrasonicReading ultrasonic = {
-    ULTRASONIC_IDLE,
-    millis() - ULTRASONIC_SAMPLE_MS,
-    0,
-    999,
-    false
-  };
-
   unsigned long lastIRCheckMs      = 0;
+  unsigned long lastDistanceSampleMs = millis() - ULTRASONIC_SAMPLE_MS;
   unsigned long lastDistanceReportMs = millis() - 250;
+  uint16_t distanceCm = 999;
 
   while (true) {
     unsigned long now = millis();
@@ -383,23 +394,25 @@ void followLineWithDistance() {
       if (stopRequested()) return;
     }
 
-    updateUltrasonic(ultrasonic);
-    if (ultrasonic.sampleReady) {
+    if (now - lastDistanceSampleMs >= ULTRASONIC_SAMPLE_MS) {
+      lastDistanceSampleMs = now;
+      distanceCm = readUltrasonic();
+
       if (now - lastDistanceReportMs >= 250) {
         lastDistanceReportMs = now;
-        if (ultrasonic.distanceCm >= 999) {
+        if (distanceCm >= 999) {
           Serial.println("Distance: out of range");
         } else {
           Serial.print("Distance: ");
-          Serial.print(ultrasonic.distanceCm);
+          Serial.print(distanceCm);
           Serial.println(" cm");
         }
       }
 
-      if (ultrasonic.distanceCm <= OBSTACLE_DISTANCE_CM) {
+      if (distanceCm <= OBSTACLE_DISTANCE_CM) {
         robot.Stop();
         Serial.print("Obstacle detected at ");
-        Serial.print(ultrasonic.distanceCm);
+        Serial.print(distanceCm);
         Serial.println(" cm. Stopping.");
         return;
       }
@@ -567,11 +580,12 @@ void setup() {
   pinMode(CS_OUT, INPUT);
   pinMode(ECHO_PIN, INPUT);
   pinMode(TRIG_PIN, OUTPUT);
-  PCICR |= _BV(PCIE0);
-  PCMSK0 |= _BV(PCINT5);
-
   Serial.begin(9600);
+  espSerial.begin(9600);
   robot.Init();
+  bool wifiConnected = connectEsp32Wifi();
+  robot.right_led(wifiConnected);
+  robot.left_led(wifiConnected);
   servo.attach(SERVO_PIN);
   servo.write(30);
   // delay(1000);
