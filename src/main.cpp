@@ -24,16 +24,12 @@ const uint8_t TRIG_PIN = 12;
 // Servo Pin
 const uint8_t SERVO_PIN = 9;
 
-const uint8_t  TURNING_SPEED        = 100;
-const uint8_t  CORRECTION_SPEED     = 70;
-const uint8_t  TARGET_LINES         = 11;
-const uint8_t  LEFT_SPEED           = 38;
-const uint8_t  RIGHT_SPEED          = 40;
-const uint8_t  NUDGE_SPEED          = 42;
-const uint16_t NUDGE_DURATION_MS    = 50;
-const uint16_t HUNT_DURATION_MS     = 200;
-const uint16_t CROSS_DRIVE_MS       = 800;
-const uint16_t CROSS_PAUSE_MS       = 200;
+const uint8_t  TURNING_SPEED        = 50;
+const uint8_t  CORRECTION_SPEED     = 25;   // used by rotate180 slow scan and strafeLeft
+const uint8_t  LEFT_SPEED           = 60;   // advance speed, left side
+const uint8_t  RIGHT_SPEED          = 62;   // advance speed, right side (trim for asymmetry)
+const uint8_t  LINE_TURN_SPEED      = 45;   // spin speed for line-follow corrections
+const uint8_t  LINE_TICK_MS         = 10;   // follow-loop tick delay
 const uint16_t OBSTACLE_DISTANCE_CM = 6;
 const uint16_t ULTRASONIC_SAMPLE_MS = 50;
 const uint32_t ULTRASONIC_TIMEOUT_US = 12000;
@@ -42,12 +38,8 @@ const uint32_t ULTRASONIC_TIMEOUT_US = 12000;
 int whiteR = 949, whiteG = 967, whiteB = 881;
 int blackR = 5109, blackG = 4806, blackB = 4189;
 
-unsigned long crossingStartMs = 0;
 int           numLines        = 0;
-uint8_t       targetLines     = TARGET_LINES;
-bool          isRunning       = false;
 bool          wasOnFullLine   = false;
-bool          isCrossing      = false;
 bool          stopAll         = false;
 
 volatile unsigned long echoRiseUs = 0;
@@ -109,6 +101,11 @@ ISR(PCINT0_vect) {
 
 // ─────────────────────────────────────────────────────────────────────────────
 
+// Forward declarations (defined further down)
+bool stopRequested();
+bool waitOrStop(uint16_t ms);
+void stopEverything();
+
 void turnRight90() {
   Serial.println("Turning right 90 degrees...");
   speed_Upper_L = speed_Lower_L = speed_Upper_R = speed_Lower_R = TURNING_SPEED;
@@ -131,233 +128,139 @@ void strafeLeft(int ms) {
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-// ── Non-blocking line-follow with crossing counting (called from loop) ──────
-
-// Recovery state for handleLineTracking's all-white hunt (non-blocking)
-static uint8_t       c1RecoveryState   = 0;
-static unsigned long c1RecoveryStartMs = 0;
-
-void handleLineTracking() {
-  uint8_t sl = digitalRead(LINE_LEFT_PIN);
-  uint8_t sm = digitalRead(LINE_MIDDLE_PIN);
-  uint8_t sr = digitalRead(LINE_RIGHT_PIN);
-
-  unsigned long now      = millis();
-  bool          allBlack = (sl == 1 && sm == 1 && sr == 1);
-  bool          allWhite = (sl == 0 && sm == 0 && sr == 0);
-
-  // ── Non-blocking crossing drive-through ─────────────────────────────────
-  if (isCrossing) {
-    if (now - crossingStartMs < CROSS_DRIVE_MS) {
-      speed_Upper_L = speed_Lower_L = LEFT_SPEED;
-      speed_Upper_R = speed_Lower_R = RIGHT_SPEED;
-      robot.Advance();
-    } else if (now - crossingStartMs < CROSS_DRIVE_MS + CROSS_PAUSE_MS) {
-      robot.Stop();
-    } else {
-      isCrossing = false;
-    }
-    return;
-  }
-
-  // ── Full line crossing ──────────────────────────────────────────────────
-  if (allBlack) {
-    if (!wasOnFullLine) {
-      numLines++;
-      wasOnFullLine = true;
-
-      Serial.print("Full line crossed! Count: ");
-      Serial.println(numLines);
-
-      if (numLines >= targetLines) {
-        robot.Stop();
-        delay(200);
-        turnRight90();
-        isRunning = false;
-        robot.right_led(true);
-        robot.left_led(true);
-        Serial.println("Target reached. Robot stopped.");
-        return;
-      }
-
-      isCrossing      = true;
-      crossingStartMs = now;
-      speed_Upper_L = speed_Lower_L = LEFT_SPEED;
-      speed_Upper_R = speed_Lower_R = RIGHT_SPEED;
-      robot.Advance();
-    }
-    return;
-  }
-
+// ── Basic 3-sensor line-follow (KS0560 lesson_6 pattern) ─────────────────────
+// Advance when middle sensor is on the line and sides are clear.
+// Spin toward whichever side sensor picks up the line.
+// Count all-black as a full line crossing; stop when count hits targetCount.
+void followLineWithTarget(int targetCount) {
+  numLines      = 0;
   wasOnFullLine = false;
 
-  // ── All-white recovery (non-blocking) ───────────────────────────────────
-  if (allWhite) {
-    speed_Upper_L = speed_Lower_L = speed_Upper_R = speed_Lower_R = NUDGE_SPEED;
+  unsigned long lastIRCheckMs = 0;
 
-    if (c1RecoveryState == 0) {
-      c1RecoveryState   = 1;
-      c1RecoveryStartMs = now;
-    }
-
-    if (c1RecoveryState == 1) {
-      robot.Advance();
-      if (now - c1RecoveryStartMs >= NUDGE_DURATION_MS) {
-        c1RecoveryState   = 2;
-        c1RecoveryStartMs = now;
-      }
-    } else if (c1RecoveryState == 2) {
-      robot.Turn_Left();
-      if (now - c1RecoveryStartMs >= HUNT_DURATION_MS) {
-        c1RecoveryState   = 3;
-        c1RecoveryStartMs = now;
-      }
-    } else {
-      robot.Turn_Right();
-      if (now - c1RecoveryStartMs >= HUNT_DURATION_MS) {
-        c1RecoveryState = 0;
-        robot.Stop();
-      }
-    }
-    return;
-  }
-
-  // ── Normal tracking ─────────────────────────────────────────────────────
-  c1RecoveryState = 0;
-
-  if (sm == 1 && sl == 0 && sr == 0) {
-    speed_Upper_L = speed_Lower_L = LEFT_SPEED;
-    speed_Upper_R = speed_Lower_R = RIGHT_SPEED;
-    robot.Advance();
-  } else {
-    speed_Upper_L = speed_Lower_L = speed_Upper_R = speed_Lower_R = CORRECTION_SPEED;
-    if (sl == 1 || (sm == 1 && sl == 1)) {
-      robot.Turn_Left();
-    } else {
-      robot.Turn_Right();
-    }
-  }
-}
-
-// ── Blocking line-follow with parameterized target ───────────────────────────
-void followLineWithTarget(int targetCount) {
-  numLines         = 0;
-  wasOnFullLine    = false;
-  isCrossing       = false;
-  crossingStartMs  = 0;
-
-  uint8_t recoveryState    = 0;
-  unsigned long recoveryStartMs = 0;
+  Serial.print("Basic line follow. Target lines: ");
+  Serial.println(targetCount);
 
   while (numLines < targetCount) {
-    uint8_t sl = digitalRead(LINE_LEFT_PIN);
-    uint8_t sm = digitalRead(LINE_MIDDLE_PIN);
-    uint8_t sr = digitalRead(LINE_RIGHT_PIN);
-
     unsigned long now = millis();
-    bool allWhite = (sl == 0 && sm == 0 && sr == 0);
-    bool allBlack = (sl == 1 && sm == 1 && sr == 1);
-
-    // ── Non-blocking crossing drive-through ───────────────────────────────
-    if (isCrossing) {
-      if (now - crossingStartMs < CROSS_DRIVE_MS) {
-        speed_Upper_L = speed_Lower_L = LEFT_SPEED;
-        speed_Upper_R = speed_Lower_R = RIGHT_SPEED;
-        robot.Advance();
-      } else {
-        isCrossing = false;
-      }
-      continue;
+    if (now - lastIRCheckMs >= 50) {
+      lastIRCheckMs = now;
+      if (stopRequested()) return;
     }
 
-    // ── Full line crossing ────────────────────────────────────────────────
-    if (allBlack) {
+    uint8_t SL = digitalRead(LINE_LEFT_PIN);
+    uint8_t SM = digitalRead(LINE_MIDDLE_PIN);
+    uint8_t SR = digitalRead(LINE_RIGHT_PIN);
+
+    // Count crossings — all three sensors on black at once, one-shot per line
+    if (SL == HIGH && SM == HIGH && SR == HIGH) {
       if (!wasOnFullLine) {
         numLines++;
         wasOnFullLine = true;
-
         Serial.print("Line crossed: ");
         Serial.print(numLines);
         Serial.print("/");
         Serial.println(targetCount);
-
         if (numLines >= targetCount) {
           robot.Stop();
           Serial.println("Target reached.");
           return;
         }
-
-        isCrossing      = true;
-        crossingStartMs = now;
       }
-      speed_Upper_L = speed_Lower_L = LEFT_SPEED;
-      speed_Upper_R = speed_Lower_R = RIGHT_SPEED;
-      robot.Advance();
-      // delay(CROSS_PAUSE_MS);   // debounce: prevent re-triggering on the same line
-
-      // isCrossing      = true;
-      // crossingStartMs = millis();
-      continue;
-    }
-
-    wasOnFullLine = false;
-
-    // ── All-white recovery ────────────────────────────────────────────────
-    if (allWhite) {
-      speed_Upper_L = speed_Lower_L = speed_Upper_R = speed_Lower_R = NUDGE_SPEED;
-
-      if (recoveryState == 0) {
-        recoveryState    = 1;
-        recoveryStartMs  = now;
-      }
-
-      if (recoveryState == 1) {
-        robot.Advance();
-        if (now - recoveryStartMs >= NUDGE_DURATION_MS) {
-          recoveryState   = 2;
-          recoveryStartMs = now;
-        }
-      } else if (recoveryState == 2) {
-        robot.Turn_Left();
-        if (now - recoveryStartMs >= HUNT_DURATION_MS) {
-          recoveryState   = 3;
-          recoveryStartMs = now;
-        }
-      } else {
-        robot.Turn_Right();
-        if (now - recoveryStartMs >= HUNT_DURATION_MS) {
-          recoveryState = 0;
-          robot.Stop();
-        }
-      }
-      continue;
-    }
-
-    // ── Normal line follow ────────────────────────────────────────────────
-    recoveryState = 0;
-    if (sm == 1 && sl == 0 && sr == 0) {
-      speed_Upper_L = speed_Lower_L = LEFT_SPEED;
-      speed_Upper_R = speed_Lower_R = RIGHT_SPEED;
-      robot.Advance();
     } else {
-      speed_Upper_L = speed_Lower_L = speed_Upper_R = speed_Lower_R = CORRECTION_SPEED;
-      if (sl == 1 || (sm == 1 && sl == 1)) {
-        robot.Turn_Left();
-      } else {
-        robot.Turn_Right();
-      }
+      wasOnFullLine = false;
     }
+
+    // Basic 3-sensor tracking (from KS0560 lesson_6). HIGH = black, LOW = white.
+    // Fallback in every ambiguous state = Advance, so a single-tick sensor
+    // flicker never stalls the robot mid-track.
+    if (SL == LOW && SR == HIGH) {
+      speed_Upper_L = speed_Lower_L = speed_Upper_R = speed_Lower_R = LINE_TURN_SPEED;
+      robot.Turn_Right();
+    } else if (SR == LOW && SL == HIGH) {
+      speed_Upper_L = speed_Lower_L = speed_Upper_R = speed_Lower_R = LINE_TURN_SPEED;
+      robot.Turn_Left();
+    } else {
+      speed_Upper_L = speed_Lower_L = LEFT_SPEED;
+      speed_Upper_R = speed_Lower_R = RIGHT_SPEED;
+      robot.Advance();
+    }
+
+    delay(LINE_TICK_MS);
   }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-void rotate180() {
-  Serial.println("Rotating 180 degrees...");
+// Three phases: (1) fast coarse spin, (2) keep spinning until all sensors are
+// off any line (guarantees we've left the original line), (3) slow scan until
+// the middle sensor picks up the line again. Returns false if the line is
+// never reacquired (LEDs blink then stay on as a failure signal).
+bool rotate180() {
+  const uint16_t ROTATE180_COARSE_MS        = 1000;   // 2x since TURNING_SPEED halved to 50
+  const uint16_t ROTATE180_LEAVE_TIMEOUT_MS = 3000;   // 2x safety since CORRECTION_SPEED dropped
+  const uint16_t ROTATE180_SCAN_TIMEOUT_MS  = 5000;
+
+  Serial.println("Rotating 180 degrees (sensor-based)...");
+
+  // Phase 1: coarse fast spin
   speed_Upper_L = speed_Lower_L = speed_Upper_R = speed_Lower_R = TURNING_SPEED;
   robot.Turn_Right();
-  delay(1300);
+  delay(ROTATE180_COARSE_MS);
+
+  // Phase 2: slow spin, wait until all sensors see white (we've left the line)
+  speed_Upper_L = speed_Lower_L = speed_Upper_R = speed_Lower_R = CORRECTION_SPEED;
+  robot.Turn_Right();
+
+  unsigned long leaveStart = millis();
+  unsigned long lastIRCheckMs = 0;
+  bool leftLine = false;
+  while (millis() - leaveStart < ROTATE180_LEAVE_TIMEOUT_MS) {
+    unsigned long tickNow = millis();
+    if (tickNow - lastIRCheckMs >= 50) {
+      lastIRCheckMs = tickNow;
+      if (stopRequested()) { robot.Stop(); return false; }
+    }
+    if (digitalRead(LINE_LEFT_PIN)   == 0 &&
+        digitalRead(LINE_MIDDLE_PIN) == 0 &&
+        digitalRead(LINE_RIGHT_PIN)  == 0) {
+      leftLine = true;
+      break;
+    }
+  }
+
+  if (!leftLine) {
+    Serial.println("rotate180: never left original line.");
+  }
+
+  // Phase 3: keep spinning until middle sensor sees black again
+  unsigned long scanStart = millis();
+  while (millis() - scanStart < ROTATE180_SCAN_TIMEOUT_MS) {
+    unsigned long tickNow = millis();
+    if (tickNow - lastIRCheckMs >= 50) {
+      lastIRCheckMs = tickNow;
+      if (stopRequested()) { robot.Stop(); return false; }
+    }
+    if (digitalRead(LINE_MIDDLE_PIN) == 1) {
+      robot.Stop();
+      Serial.println("Line reacquired after 180.");
+      return true;
+    }
+  }
+
   robot.Stop();
+  Serial.println("rotate180: line not found. Stopped.");
+  for (uint8_t i = 0; i < 3; i++) {
+    robot.right_led(true);
+    robot.left_led(true);
+    delay(200);
+    robot.right_led(false);
+    robot.left_led(false);
+    delay(200);
+  }
+  robot.right_led(true);
+  robot.left_led(true);
+  return false;
 }
 
 // ── Servo Gripper ─────────────────────────────────────────────────────────
@@ -376,9 +279,7 @@ void openGripper(bool state) {
 
 void stopEverything() {
   robot.Stop();
-  isRunning  = false;
-  isCrossing = false;
-  stopAll    = true;
+  stopAll = true;
   robot.right_led(false);
   robot.left_led(false);
   Serial.println("Stopped.");
@@ -512,7 +413,10 @@ void updateUltrasonic(UltrasonicReading &sensor) {
 
 // ── Line follow with ultrasonic obstacle stop ─────────────────────────────
 
-void followLineWithDistance () {
+// ── Basic 3-sensor follow with ultrasonic obstacle stop ──────────────────────
+// Same tracking logic as followLineWithTarget; runs until an obstacle is
+// detected within OBSTACLE_DISTANCE_CM or STOP is pressed.
+void followLineWithDistance() {
   Serial.println("Following line with distance check...");
 
   UltrasonicReading ultrasonic = {
@@ -522,17 +426,19 @@ void followLineWithDistance () {
     999,
     false
   };
-  bool wasOnFullLine = false;
-  bool isCrossing = false;
-  unsigned long crossingStartMs = 0;
-  uint8_t recoveryState = 0;
-  unsigned long recoveryStartMs = 0;
+
+  unsigned long lastIRCheckMs      = 0;
   unsigned long lastDistanceReportMs = millis() - 250;
 
   while (true) {
+    unsigned long now = millis();
+    if (now - lastIRCheckMs >= 50) {
+      lastIRCheckMs = now;
+      if (stopRequested()) return;
+    }
+
     updateUltrasonic(ultrasonic);
     if (ultrasonic.sampleReady) {
-      unsigned long now = millis();
       if (now - lastDistanceReportMs >= 250) {
         lastDistanceReportMs = now;
         if (ultrasonic.distanceCm >= 999) {
@@ -553,82 +459,25 @@ void followLineWithDistance () {
       }
     }
 
-    uint8_t sl = digitalRead(LINE_LEFT_PIN);
-    uint8_t sm = digitalRead(LINE_MIDDLE_PIN);
-    uint8_t sr = digitalRead(LINE_RIGHT_PIN);
+    uint8_t SL = digitalRead(LINE_LEFT_PIN);
+    uint8_t SM = digitalRead(LINE_MIDDLE_PIN);
+    uint8_t SR = digitalRead(LINE_RIGHT_PIN);
 
-    unsigned long now = millis();
-    bool allWhite = (sl == 0 && sm == 0 && sr == 0);
-    bool allBlack = (sl == 1 && sm == 1 && sr == 1);
-
-    if (isCrossing) {
-      if (now - crossingStartMs < CROSS_DRIVE_MS) {
-        speed_Upper_L = speed_Lower_L = LEFT_SPEED;
-        speed_Upper_R = speed_Lower_R = RIGHT_SPEED;
-        robot.Advance();
-      } else {
-        isCrossing = false;
-      }
-      continue;
-    }
-
-    if (allBlack) {
-      if (!wasOnFullLine) {
-        wasOnFullLine = true;
-        isCrossing = true;
-        crossingStartMs = now;
-      }
-      speed_Upper_L = speed_Lower_L = LEFT_SPEED;
-      speed_Upper_R = speed_Lower_R = RIGHT_SPEED;
-      robot.Advance();
-      continue;
-    }
-
-    wasOnFullLine = false;
-
-    if (allWhite) {
-      speed_Upper_L = speed_Lower_L = speed_Upper_R = speed_Lower_R = NUDGE_SPEED;
-
-      if (recoveryState == 0) {
-        recoveryState = 1;
-        recoveryStartMs = now;
-      }
-
-      if (recoveryState == 1) {
-        robot.Advance();
-        if (now - recoveryStartMs >= NUDGE_DURATION_MS) {
-          recoveryState = 2;
-          recoveryStartMs = now;
-        }
-      } else if (recoveryState == 2) {
-        robot.Turn_Left();
-        if (now - recoveryStartMs >= HUNT_DURATION_MS) {
-          recoveryState = 3;
-          recoveryStartMs = now;
-        }
-      } else {
-        robot.Turn_Right();
-        if (now - recoveryStartMs >= HUNT_DURATION_MS) {
-          recoveryState = 0;
-          robot.Stop();
-        }
-      }
-      continue;
-    }
-
-    recoveryState = 0;
-    if (sm == 1 && sl == 0 && sr == 0) {
-      speed_Upper_L = speed_Lower_L = LEFT_SPEED;
-      speed_Upper_R = speed_Lower_R = RIGHT_SPEED;
-      robot.Advance();
+    // Basic 3-sensor tracking. Fallback = Advance so brief sensor blips
+    // don't stall the robot; ultrasonic stop is what ends this function.
+    if (SL == LOW && SR == HIGH) {
+      speed_Upper_L = speed_Lower_L = speed_Upper_R = speed_Lower_R = LINE_TURN_SPEED;
+      robot.Turn_Right();
+    } else if (SR == LOW && SL == HIGH) {
+      speed_Upper_L = speed_Lower_L = speed_Upper_R = speed_Lower_R = LINE_TURN_SPEED;
+      robot.Turn_Left();
     } else {
-      speed_Upper_L = speed_Lower_L = speed_Upper_R = speed_Lower_R = CORRECTION_SPEED;
-      if (sl == 1 || (sm == 1 && sl == 1)) {
-        robot.Turn_Left();
-      } else {
-        robot.Turn_Right();
-      }
+      speed_Upper_L = speed_Lower_L = LEFT_SPEED;
+      speed_Upper_R = speed_Lower_R = RIGHT_SPEED;
+      robot.Advance();
     }
+
+    delay(LINE_TICK_MS);
   }
 }
 
@@ -657,18 +506,20 @@ void loop() {
 
   // challenge 1
   if (key == 22) {
+    stopAll = false;
     followLineWithTarget(7);
   }
 
   // challenge 2
   if (key == 25) {
+    stopAll = false;
     robot.right_led(false);
     robot.left_led(false);
     Serial.println("Following 2 lines...");
     followLineWithTarget(2);
     strafeLeft(1000);
     followLineWithTarget(4);
-    rotate180();
+    if (!rotate180()) return;
     followLineWithTarget(3);
     robot.right_led(true);
     robot.left_led(true);
@@ -677,15 +528,18 @@ void loop() {
 
   // challenge 3
   if (key == 13) {
+    stopAll = false;
     followLineWithDistance();
+    if (stopAll) return;
     static bool gripperOpen = true;
     openGripper(gripperOpen);
-    delay(5000);
+    if (waitOrStop(5000)) return;
     gripperOpen = !gripperOpen;
-    rotate180();
+    if (!rotate180()) return;
     followLineWithTarget(7);
+    if (stopAll) return;
     openGripper(gripperOpen);
-    delay(5000);
+    if (waitOrStop(5000)) return;
     gripperOpen = !gripperOpen;
   }
 
@@ -731,8 +585,7 @@ void loop() {
   // stop everything
   if (key == 70) {
     robot.Stop();
-    isRunning   = false;
-    isCrossing  = false;
+    stopAll = true;
     robot.right_led(false);
     robot.left_led(false);
     Serial.println("Stopped.");
