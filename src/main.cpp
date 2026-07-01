@@ -646,6 +646,7 @@ void loop() {
     openGripper(isGripperOpen);
     if (waitOrStop(5000)) return;
     isGripperOpen = !isGripperOpen;
+    fetchBlue();
   }
 
   if (key == 12) {
