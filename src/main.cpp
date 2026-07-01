@@ -24,20 +24,19 @@ const uint8_t TRIG_PIN = 12;
 // Servo Pin
 const uint8_t SERVO_PIN = 9;
 
-const uint8_t  TURNING_SPEED        = 45;
-const uint8_t  CORRECTION_SPEED     = 30;
-const uint8_t  TARGET_LINES         = 7;
-const uint8_t  LEFT_SPEED           = 45;
-const uint8_t  RIGHT_SPEED          = 45;
-const uint8_t  NUDGE_SPEED          = 25;
-const uint16_t NUDGE_DURATION_MS    = 15;
+const uint8_t  TURNING_SPEED        = 100;
+const uint8_t  CORRECTION_SPEED     = 70;
+const uint8_t  TARGET_LINES         = 11;
+const uint8_t  LEFT_SPEED           = 38;
+const uint8_t  RIGHT_SPEED          = 40;
+const uint8_t  NUDGE_SPEED          = 42;
+const uint16_t NUDGE_DURATION_MS    = 50;
 const uint16_t HUNT_DURATION_MS     = 200;
-const uint16_t CROSS_DRIVE_MS       = 500;
+const uint16_t CROSS_DRIVE_MS       = 800;
 const uint16_t CROSS_PAUSE_MS       = 200;
-const uint16_t OBSTACLE_DISTANCE_CM = 8;
+const uint16_t OBSTACLE_DISTANCE_CM = 6;
 const uint16_t ULTRASONIC_SAMPLE_MS = 50;
 const uint32_t ULTRASONIC_TIMEOUT_US = 12000;
-const uint8_t  STOP_KEY             = 64;
 
 // Color sensor calibration (white=255, black=0)
 int whiteR = 949, whiteG = 967, whiteB = 881;
@@ -55,48 +54,11 @@ volatile unsigned long echoRiseUs = 0;
 volatile unsigned long echoDurationUs = 0;
 volatile bool echoDurationReady = false;
 
-// Arduino Uno D13 is PB5 / PCINT5. Capture echo edges even while driving.
-ISR(PCINT0_vect) {
-  if (PINB & _BV(PB5)) {
-    echoRiseUs = micros();
-  } else if (echoRiseUs != 0) {
-    echoDurationUs = micros() - echoRiseUs;
-    echoDurationReady = true;
-    echoRiseUs = 0;
-  }
-}
-
-void stopEverything() {
-  robot.Stop();
-  isRunning  = false;
-  isCrossing = false;
-  stopAll    = true;
-  robot.right_led(false);
-  robot.left_led(false);
-  Serial.println("Stopped.");
-}
-
-bool stopRequested() {
-  if (stopAll) return true;
-  if (IRreceive.getKey() == STOP_KEY) {
-    stopEverything();
-    return true;
-  }
-  return false;
-}
-
-bool waitOrStop(uint16_t ms) {
-  unsigned long start = millis();
-  while (millis() - start < ms) {
-    if (stopRequested()) return true;
-    delay(1);
-  }
-  return false;
-}
-
-// ── Color Sensor ──────────────────────────────────────────────────────────────
+const uint8_t  STOP_KEY             = 64;
 
 struct RGB { uint8_t r, g, b; };
+
+enum class ColorLabel { Red, Blue, Yellow };
 
 // Read raw pulse width (µs) for given photodiode filter
 int readRawColor(bool s2, bool s3) {
@@ -123,25 +85,47 @@ RGB readColor() {
   return c;
 }
 
+ColorLabel classifyColor() {
+  RGB color = readColor(); // already logs R/G/B internally
+
+  if (color.b > color.r && color.b > color.g) return ColorLabel::Blue;
+  if (color.r > color.g && color.r > color.b) return ColorLabel::Red;
+  return ColorLabel::Yellow;
+}
+
+// Arduino Uno D13 is PB5 / PCINT5. Capture echo edges even while driving.
+ISR(PCINT0_vect) {
+  if (PINB & _BV(PB5)) {
+    echoRiseUs = micros();
+  } else if (echoRiseUs != 0) {
+    echoDurationUs = micros() - echoRiseUs;
+    echoDurationReady = true;
+    echoRiseUs = 0;
+  }
+}
+
+// ── Color Sensor ──────────────────────────────────────────────────────────────
+
+
 // ─────────────────────────────────────────────────────────────────────────────
 
 void turnRight90() {
   Serial.println("Turning right 90 degrees...");
   speed_Upper_L = speed_Lower_L = speed_Upper_R = speed_Lower_R = TURNING_SPEED;
   robot.Advance();
-  if (waitOrStop(300)) return;
+  delay(300);
   robot.Turn_Right();
-  if (waitOrStop(500)) return;
+  delay(500);
   robot.Stop();
   robot.L_Move();
-  if (waitOrStop(400)) return;
+  delay(400);
   robot.Stop();
 }
 
 void strafeLeft(int ms) {
   speed_Upper_L = speed_Lower_L = speed_Upper_R = speed_Lower_R = CORRECTION_SPEED;
   robot.L_Move();
-  if (waitOrStop(ms)) return;
+  delay(ms);
   robot.Stop();
 }
 
@@ -187,9 +171,8 @@ void handleLineTracking() {
 
       if (numLines >= targetLines) {
         robot.Stop();
-        if (waitOrStop(200)) return;
+        delay(200);
         turnRight90();
-        if (stopAll) return;
         isRunning = false;
         robot.right_led(true);
         robot.left_led(true);
@@ -266,7 +249,7 @@ void followLineWithTarget(int targetCount) {
   uint8_t recoveryState    = 0;
   unsigned long recoveryStartMs = 0;
 
-  while (numLines < targetCount && !stopRequested()) {
+  while (numLines < targetCount) {
     uint8_t sl = digitalRead(LINE_LEFT_PIN);
     uint8_t sm = digitalRead(LINE_MIDDLE_PIN);
     uint8_t sr = digitalRead(LINE_RIGHT_PIN);
@@ -310,6 +293,10 @@ void followLineWithTarget(int targetCount) {
       speed_Upper_L = speed_Lower_L = LEFT_SPEED;
       speed_Upper_R = speed_Lower_R = RIGHT_SPEED;
       robot.Advance();
+      // delay(CROSS_PAUSE_MS);   // debounce: prevent re-triggering on the same line
+
+      // isCrossing      = true;
+      // crossingStartMs = millis();
       continue;
     }
 
@@ -366,9 +353,10 @@ void followLineWithTarget(int targetCount) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 void rotate180() {
+  Serial.println("Rotating 180 degrees...");
   speed_Upper_L = speed_Lower_L = speed_Upper_R = speed_Lower_R = TURNING_SPEED;
   robot.Turn_Right();
-  if (waitOrStop(1875)) return;
+  delay(1300);
   robot.Stop();
 }
 
@@ -383,6 +371,56 @@ void openGripper(bool state) {
     Serial.println("Gripper: closed");
   }
 }
+
+// - color detection --------------------------------------------
+
+void stopEverything() {
+  robot.Stop();
+  isRunning  = false;
+  isCrossing = false;
+  stopAll    = true;
+  robot.right_led(false);
+  robot.left_led(false);
+  Serial.println("Stopped.");
+}
+
+bool stopRequested() {
+  if (stopAll) return true;
+  if (IRreceive.getKey() == STOP_KEY) {
+    stopEverything();
+    return true;
+  }
+  return false;
+}
+
+bool waitOrStop(uint16_t ms) {
+  unsigned long start = millis();
+  while (millis() - start < ms) {
+    if (stopRequested()) return true;
+    delay(1);
+  }
+  return false;
+}
+
+void gripAndIdentifyColor() {
+  if (stopRequested()) return;
+
+  Serial.println("Checking TCS3200 color...");
+  ColorLabel label = classifyColor();
+
+  delay(1000);
+  servo.write(180);
+
+  if (label == ColorLabel::Blue) {
+    Serial.println("Blue detected. Gripper closed at 180.");
+  } else if (label == ColorLabel::Red) {
+    Serial.println("Red detected. Gripper closed at 180.");
+  } else {
+    Serial.println("Yellow detected. Gripper closed at 180.");
+  }
+}
+
+
 
 // ── Ultrasonic Sensor ─────────────────────────────────────────────────────
 
@@ -492,8 +530,6 @@ void followLineWithDistance () {
   unsigned long lastDistanceReportMs = millis() - 250;
 
   while (true) {
-    if (stopRequested()) return;
-
     updateUltrasonic(ultrasonic);
     if (ultrasonic.sampleReady) {
       unsigned long now = millis();
@@ -618,52 +654,22 @@ void setup() {
 
 void loop() {
   int key = IRreceive.getKey();
-  if (key != -1) {
-    Serial.print("IR: ");
-    Serial.println(key);
-  }
-
-  if (key == STOP_KEY) {
-    stopEverything();
-    return;
-  }
 
   // challenge 1
   if (key == 22) {
-    stopAll         = false;
-    numLines        = 0;
-    wasOnFullLine   = false;
-    isCrossing      = false;
-    isRunning       = true;
-    c1RecoveryState = 0;  // reset recovery state on fresh start
-    robot.right_led(false);
-    robot.left_led(false);
-    Serial.println("Program started!");
-
-    while (isRunning && !stopRequested()) handleLineTracking();
-    if (stopAll) return;
-
-    robot.right_led(true);
-    robot.left_led(true);
-    Serial.println("Challenge 1 done.");
+    followLineWithTarget(7);
   }
 
   // challenge 2
   if (key == 25) {
-    stopAll = false;
     robot.right_led(false);
     robot.left_led(false);
     Serial.println("Following 2 lines...");
     followLineWithTarget(2);
-    if (stopAll) return;
     strafeLeft(1000);
-    if (stopAll) return;
     followLineWithTarget(4);
-    if (stopAll) return;
     rotate180();
-    if (stopAll) return;
     followLineWithTarget(3);
-    if (stopAll) return;
     robot.right_led(true);
     robot.left_led(true);
     Serial.println("Done.");
@@ -671,30 +677,31 @@ void loop() {
 
   // challenge 3
   if (key == 13) {
-    stopAll = false;
     followLineWithDistance();
     static bool gripperOpen = true;
     openGripper(gripperOpen);
-    if (waitOrStop(5000)) return;
+    delay(5000);
     gripperOpen = !gripperOpen;
     rotate180();
-    if (stopAll) return;
     followLineWithTarget(7);
-    if (stopAll) return;
     openGripper(gripperOpen);
-    if (waitOrStop(5000)) return;
+    delay(5000);
     gripperOpen = !gripperOpen;
   }
 
-  // Test for color sensor
+  // // Test for color sensor
+  // if (key == 12) {
+  //   Serial.println("Reading color...");
+  //   while (IRreceive.getKey() != 70) {
+  //     readColor();
+  //     delay(500);
+  //   }
+  //   Serial.println("Color read stopped.");
+  // }
+
   if (key == 12) {
     stopAll = false;
-    Serial.println("Reading color...");
-    while (!stopRequested()) {
-      readColor();
-      if (waitOrStop(500)) break;
-    }
-    Serial.println("Color read stopped.");
+    gripAndIdentifyColor();
   }
 
   // Button to test out code - gripper
@@ -706,9 +713,8 @@ void loop() {
 
   // Test for ultrasonic sensor
   if (key == 74) {
-    stopAll = false;
     Serial.println("Ultrasonic reading started...");
-    while (!stopRequested()) {
+    while (IRreceive.getKey() != 70) {
       uint16_t dist = readUltrasonic();
       if (dist >= 999)
         Serial.println("Distance: out of range");
@@ -717,8 +723,29 @@ void loop() {
         Serial.print(dist);
         Serial.println(" cm");
       }
-      if (waitOrStop(250)) break;
+      delay(250);
     }
     Serial.println("Ultrasonic stopped.");
   }
+
+  // stop everything
+  if (key == 70) {
+    robot.Stop();
+    isRunning   = false;
+    isCrossing  = false;
+    robot.right_led(false);
+    robot.left_led(false);
+    Serial.println("Stopped.");
+  }
+    // delay(5000);
+    // followLineWithDistance();
+    // static bool gripperOpen = true;
+    // openGripper(gripperOpen);
+    // delay(10000);
+    // gripperOpen = !gripperOpen;
+    // rotate180();
+    // followLineWithTarget(7);
+    // openGripper(gripperOpen);
+    // delay(5000);
+    // gripperOpen = !gripperOpen;
 }
