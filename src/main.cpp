@@ -36,6 +36,8 @@ const uint16_t ULTRASONIC_SAMPLE_MS = 50;
 const uint32_t ULTRASONIC_TIMEOUT_US = 12000;
 const uint8_t  LINE_SEARCH_SPEED    = 40;   // aggressive turning when line is lost
 
+bool isGripperOpen = true; // true = open, false = closed
+
 // Color sensor calibration (white=255, black=0)
 int whiteR = 949, whiteG = 967, whiteB = 881;
 int blackR = 5109, blackG = 4806, blackB = 4189;
@@ -211,10 +213,10 @@ bool rotate180() {
 void openGripper(bool state) {
   if (state) {
     servo.write(180);
-    Serial.println("Gripper: open");
+    Serial.println("Gripper: close");
   } else {
-    servo.write(0);
-    Serial.println("Gripper: closed");
+    servo.write(30);
+    Serial.println("Gripper: open");
   }
 }
 
@@ -246,14 +248,15 @@ bool waitOrStop(uint16_t ms) {
   return false;
 }
 
-void gripAndIdentifyColor() {
+void gripAndIdentifyColor(bool gOpen) {
   if (stopRequested()) return;
 
   Serial.println("Checking TCS3200 color...");
   ColorLabel label = classifyColor();
 
   delay(1000);
-  servo.write(180);
+  // servo.write(180);
+  openGripper(gOpen);
 
   if (label == ColorLabel::Blue) {
     Serial.println("Blue detected. Gripper closed at 180.");
@@ -570,8 +573,8 @@ void setup() {
   Serial.begin(9600);
   robot.Init();
   servo.attach(SERVO_PIN);
-  servo.write(0);
-  delay(1000);
+  servo.write(30);
+  // delay(1000);
   Serial.println("Ready. Press IR to start.");
 }
 
@@ -605,34 +608,23 @@ void loop() {
     stopAll = false;
     followLineWithDistance();
     if (stopAll) return;
-    static bool gripperOpen = true;
-    openGripper(gripperOpen);
+    gripAndIdentifyColor(isGripperOpen);
     if (waitOrStop(5000)) return;
-    gripperOpen = !gripperOpen;
+    isGripperOpen = !isGripperOpen;
     if (!rotate180()) return;
 
     if (!searchAndCenterLine()) return;
 
     followLineWithTarget(7);
     if (stopAll) return;
-    openGripper(gripperOpen);
+    openGripper(isGripperOpen);
     if (waitOrStop(5000)) return;
-    gripperOpen = !gripperOpen;
+    isGripperOpen = !isGripperOpen;
   }
-
-  // // Test for color sensor
-  // if (key == 12) {
-  //   Serial.println("Reading color...");
-  //   while (IRreceive.getKey() != 70) {
-  //     readColor();
-  //     delay(500);
-  //   }
-  //   Serial.println("Color read stopped.");
-  // }
 
   if (key == 12) {
     stopAll = false;
-    gripAndIdentifyColor();
+    gripAndIdentifyColor(isGripperOpen);
   }
 
   // Button to test out code - gripper
@@ -667,15 +659,5 @@ void loop() {
     robot.left_led(false);
     Serial.println("Stopped.");
   }
-    // delay(5000);
-    // followLineWithDistance();
-    // static bool gripperOpen = true;
-    // openGripper(gripperOpen);
-    // delay(10000);
-    // gripperOpen = !gripperOpen;
-    // rotate180();
-    // followLineWithTarget(7);
-    // openGripper(gripperOpen);
-    // delay(5000);
-    // gripperOpen = !gripperOpen;
+
 }
