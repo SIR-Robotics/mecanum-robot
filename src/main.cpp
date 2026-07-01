@@ -127,6 +127,18 @@ bool connectEsp32Wifi() {
   return false;
 }
 
+void fetchRed() {
+  espSerial.println("RUN_RED");
+}
+
+void fetchBlue() {
+  espSerial.println("RUN_BLUE");
+}
+
+void fetchYellow() {
+  espSerial.println("RUN_YELLOW");
+}
+
 void turnRight90() {
   Serial.println("Turning right 90 degrees...");
   speed_Upper_L = speed_Lower_L = speed_Upper_R = speed_Lower_R = TURNING_SPEED;
@@ -663,6 +675,11 @@ void loop() {
       delay(250);
     }
     Serial.println("Ultrasonic stopped.");
+  }
+
+  // test run robot
+  if (key == 28) {
+    fetchBlue();
   }
 
   // stop everything

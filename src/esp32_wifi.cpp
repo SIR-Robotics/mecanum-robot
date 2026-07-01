@@ -1,8 +1,10 @@
 #include <Arduino.h>
+#include <HTTPClient.h>
 #include <WiFi.h>
 
 const char* WIFI_SSID = "ASEM Training";
 const char* WIFI_PASS = "Class@Asem";
+const char* ARM_API_BASE = "http://10.4.0.99";
 
 HardwareSerial unoSerial(2);
 
@@ -13,6 +15,55 @@ const uint32_t UNO_BAUD = 9600;
 void report(const char* message) {
   Serial.println(message);
   unoSerial.println(message);
+}
+
+bool runArmApi(const char* path) {
+  if (WiFi.status() != WL_CONNECTED) return false;
+
+  HTTPClient http;
+  String url = String(ARM_API_BASE) + path;
+  http.begin(url);
+  int code = http.POST("");
+  http.end();
+
+  return code >= 200 && code < 300;
+}
+
+bool fetchRed() {
+  return runArmApi("/api/run/red");
+}
+
+bool fetchBlue() {
+  return runArmApi("/api/run/blue");
+}
+
+bool fetchYellow() {
+  return runArmApi("/api/run/yellow");
+}
+
+void handleUnoCommand(const String& command) {
+  if (command == "RUN_RED") {
+    report(fetchRed() ? "ARM_RED_OK" : "ARM_RED_FAIL");
+  } else if (command == "RUN_BLUE") {
+    report(fetchBlue() ? "ARM_BLUE_OK" : "ARM_BLUE_FAIL");
+  } else if (command == "RUN_YELLOW") {
+    report(fetchYellow() ? "ARM_YELLOW_OK" : "ARM_YELLOW_FAIL");
+  }
+}
+
+void readUnoCommands() {
+  static String command;
+
+  while (unoSerial.available()) {
+    char c = unoSerial.read();
+    if (c == '\n') {
+      command.trim();
+      if (command.length() > 0) handleUnoCommand(command);
+      command = "";
+    } else if (c != '\r') {
+      command += c;
+    }
+  }
 }
 
 void connectWifi() {
@@ -45,6 +96,8 @@ void setup() {
 
 void loop() {
   static unsigned long lastReportMs = 0;
+
+  readUnoCommands();
 
   if (WiFi.status() != WL_CONNECTED) {
     report("WIFI_DISCONNECTED");
