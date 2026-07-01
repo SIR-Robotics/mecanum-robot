@@ -25,15 +25,16 @@ const uint8_t TRIG_PIN = 12;
 const uint8_t SERVO_PIN = 9;
 
 const uint8_t  TURNING_SPEED        = 50;
-const uint16_t ROTATE180_MS         = 1300; // tune manually — how long TURNING_SPEED gives you 180°
+const uint16_t ROTATE180_MS         = 1000; // tune manually — how long TURNING_SPEED gives you 180°
 const uint8_t  CORRECTION_SPEED     = 25;   // used by strafeLeft
-const uint8_t  LEFT_SPEED           = 60;   // advance speed, left side
-const uint8_t  RIGHT_SPEED          = 62;   // advance speed, right side (trim for asymmetry)
-const uint8_t  LINE_TURN_SPEED      = 45;   // spin speed for line-follow corrections
+const uint8_t  LEFT_SPEED           = 40;   // advance speed, left side
+const uint8_t  RIGHT_SPEED          = 42;   // advance speed, right side (trim for asymmetry)
+const uint8_t  LINE_TURN_SPEED      = 25;   // spin speed for line-follow corrections
 const uint8_t  LINE_TICK_MS         = 10;   // follow-loop tick delay
 const uint16_t OBSTACLE_DISTANCE_CM = 6;
 const uint16_t ULTRASONIC_SAMPLE_MS = 50;
 const uint32_t ULTRASONIC_TIMEOUT_US = 12000;
+const uint8_t  LINE_SEARCH_SPEED    = 40;   // aggressive turning when line is lost
 
 // Color sensor calibration (white=255, black=0)
 int whiteR = 949, whiteG = 967, whiteB = 881;
@@ -423,6 +424,137 @@ void followLineWithDistance() {
   }
 }
 
+bool searchAndCenterLine(uint16_t timeoutMs = 0) {
+  Serial.println("Searching and centering on line...");
+
+  const uint8_t CENTER_CONFIRM_TICKS = 5;
+  uint8_t centeredTicks = 0;
+
+  unsigned long startMs = millis();
+  unsigned long searchStepStartMs = millis();
+
+  uint8_t searchStep = 0;
+
+  while (true) {
+    if (stopRequested()) {
+      robot.Stop();
+      return false;
+    }
+
+    if (timeoutMs > 0 && millis() - startMs >= timeoutMs) {
+      robot.Stop();
+      Serial.println("Search timeout. Line not found.");
+      return false;
+    }
+
+    uint8_t SL = digitalRead(LINE_LEFT_PIN);
+    uint8_t SM = digitalRead(LINE_MIDDLE_PIN);
+    uint8_t SR = digitalRead(LINE_RIGHT_PIN);
+
+    // Perfect: middle sensor is on black, left/right are white
+    if (SL == LOW && SM == HIGH && SR == LOW) {
+      robot.Stop();
+      centeredTicks++;
+
+      if (centeredTicks >= CENTER_CONFIRM_TICKS) {
+        Serial.println("Line found and centered.");
+        return true;
+      }
+
+      delay(LINE_TICK_MS);
+      continue;
+    }
+
+    centeredTicks = 0;
+
+    // Any sensor sees black: correct toward center
+    if (SL == HIGH || SM == HIGH || SR == HIGH) {
+      speed_Upper_L = speed_Lower_L = speed_Upper_R = speed_Lower_R = LINE_TURN_SPEED;
+
+      if (SL == HIGH && SM == LOW && SR == LOW) {
+        // Line is on left
+        robot.Turn_Left();
+      } 
+      else if (SL == HIGH && SM == HIGH && SR == LOW) {
+        // Line is slightly left
+        robot.Turn_Left();
+      } 
+      else if (SL == LOW && SM == LOW && SR == HIGH) {
+        // Line is on right
+        robot.Turn_Right();
+      } 
+      else if (SL == LOW && SM == HIGH && SR == HIGH) {
+        // Line is slightly right
+        robot.Turn_Right();
+      } 
+      else if (SL == HIGH && SM == HIGH && SR == HIGH) {
+        // On a crossing / thick line, move forward slowly until it becomes normal
+        speed_Upper_L = speed_Lower_L = LEFT_SPEED;
+        speed_Upper_R = speed_Lower_R = RIGHT_SPEED;
+        robot.Advance();
+      } 
+      else {
+        // Middle detects black, but not stable yet
+        speed_Upper_L = speed_Lower_L = LEFT_SPEED;
+        speed_Upper_R = speed_Lower_R = RIGHT_SPEED;
+        robot.Advance();
+      }
+
+      delay(LINE_TICK_MS);
+      continue;
+    }
+
+ // All sensors are white: line is lost.
+// Aggressive search pattern:
+// 1. fast turn left
+// 2. fast turn right longer
+// 3. fast turn left longer
+// 4. creep forward slightly
+// repeat
+unsigned long stepElapsed = millis() - searchStepStartMs;
+
+speed_Upper_L = speed_Lower_L = speed_Upper_R = speed_Lower_R = LINE_SEARCH_SPEED;
+
+if (searchStep == 0) {
+  robot.Turn_Left();
+
+  if (stepElapsed >= 350) {
+    searchStep = 1;
+    searchStepStartMs = millis();
+  }
+} 
+else if (searchStep == 1) {
+  robot.Turn_Right();
+
+  if (stepElapsed >= 800) {
+    searchStep = 2;
+    searchStepStartMs = millis();
+  }
+} 
+else if (searchStep == 2) {
+  robot.Turn_Left();
+
+  if (stepElapsed >= 800) {
+    searchStep = 3;
+    searchStepStartMs = millis();
+  }
+} 
+else {
+  // Small forward push in case robot is just behind/beside the line
+  speed_Upper_L = speed_Lower_L = 30;
+  speed_Upper_R = speed_Lower_R = 30;
+  robot.Advance();
+
+  if (stepElapsed >= 250) {
+    searchStep = 0;
+    searchStepStartMs = millis();
+  }
+}
+
+delay(LINE_TICK_MS);
+  }
+}
+
 void setup() {
   pinMode(LINE_LEFT_PIN,   INPUT);
   pinMode(LINE_MIDDLE_PIN, INPUT);
@@ -478,6 +610,9 @@ void loop() {
     if (waitOrStop(5000)) return;
     gripperOpen = !gripperOpen;
     if (!rotate180()) return;
+
+    if (!searchAndCenterLine()) return;
+
     followLineWithTarget(7);
     if (stopAll) return;
     openGripper(gripperOpen);
