@@ -25,7 +25,8 @@ const uint8_t TRIG_PIN = 12;
 const uint8_t SERVO_PIN = 9;
 
 const uint8_t  TURNING_SPEED        = 50;
-const uint8_t  CORRECTION_SPEED     = 25;   // used by rotate180 slow scan and strafeLeft
+const uint16_t ROTATE180_MS         = 1300; // tune manually — how long TURNING_SPEED gives you 180°
+const uint8_t  CORRECTION_SPEED     = 25;   // used by strafeLeft
 const uint8_t  LEFT_SPEED           = 60;   // advance speed, left side
 const uint8_t  RIGHT_SPEED          = 62;   // advance speed, right side (trim for asymmetry)
 const uint8_t  LINE_TURN_SPEED      = 45;   // spin speed for line-follow corrections
@@ -192,75 +193,16 @@ void followLineWithTarget(int targetCount) {
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-// Three phases: (1) fast coarse spin, (2) keep spinning until all sensors are
-// off any line (guarantees we've left the original line), (3) slow scan until
-// the middle sensor picks up the line again. Returns false if the line is
-// never reacquired (LEDs blink then stay on as a failure signal).
+// Simple timed 180° right turn. Tune ROTATE180_MS at the top of the file
+// until the robot lands facing 180° reliably. Returns false if STOP is
+// pressed mid-turn, true otherwise.
 bool rotate180() {
-  const uint16_t ROTATE180_COARSE_MS        = 1000;   // 2x since TURNING_SPEED halved to 50
-  const uint16_t ROTATE180_LEAVE_TIMEOUT_MS = 3000;   // 2x safety since CORRECTION_SPEED dropped
-  const uint16_t ROTATE180_SCAN_TIMEOUT_MS  = 5000;
-
-  Serial.println("Rotating 180 degrees (sensor-based)...");
-
-  // Phase 1: coarse fast spin
+  Serial.println("Rotating 180 degrees...");
   speed_Upper_L = speed_Lower_L = speed_Upper_R = speed_Lower_R = TURNING_SPEED;
   robot.Turn_Right();
-  delay(ROTATE180_COARSE_MS);
-
-  // Phase 2: slow spin, wait until all sensors see white (we've left the line)
-  speed_Upper_L = speed_Lower_L = speed_Upper_R = speed_Lower_R = CORRECTION_SPEED;
-  robot.Turn_Right();
-
-  unsigned long leaveStart = millis();
-  unsigned long lastIRCheckMs = 0;
-  bool leftLine = false;
-  while (millis() - leaveStart < ROTATE180_LEAVE_TIMEOUT_MS) {
-    unsigned long tickNow = millis();
-    if (tickNow - lastIRCheckMs >= 50) {
-      lastIRCheckMs = tickNow;
-      if (stopRequested()) { robot.Stop(); return false; }
-    }
-    if (digitalRead(LINE_LEFT_PIN)   == 0 &&
-        digitalRead(LINE_MIDDLE_PIN) == 0 &&
-        digitalRead(LINE_RIGHT_PIN)  == 0) {
-      leftLine = true;
-      break;
-    }
-  }
-
-  if (!leftLine) {
-    Serial.println("rotate180: never left original line.");
-  }
-
-  // Phase 3: keep spinning until middle sensor sees black again
-  unsigned long scanStart = millis();
-  while (millis() - scanStart < ROTATE180_SCAN_TIMEOUT_MS) {
-    unsigned long tickNow = millis();
-    if (tickNow - lastIRCheckMs >= 50) {
-      lastIRCheckMs = tickNow;
-      if (stopRequested()) { robot.Stop(); return false; }
-    }
-    if (digitalRead(LINE_MIDDLE_PIN) == 1) {
-      robot.Stop();
-      Serial.println("Line reacquired after 180.");
-      return true;
-    }
-  }
-
+  bool stopped = waitOrStop(ROTATE180_MS);
   robot.Stop();
-  Serial.println("rotate180: line not found. Stopped.");
-  for (uint8_t i = 0; i < 3; i++) {
-    robot.right_led(true);
-    robot.left_led(true);
-    delay(200);
-    robot.right_led(false);
-    robot.left_led(false);
-    delay(200);
-  }
-  robot.right_led(true);
-  robot.left_led(true);
-  return false;
+  return !stopped;
 }
 
 // ── Servo Gripper ─────────────────────────────────────────────────────────
