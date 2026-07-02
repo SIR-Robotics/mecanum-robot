@@ -670,7 +670,7 @@ delay(LINE_TICK_MS);
 
 bool returnToCheckpoint() {
   robotReverse(1500);
-  if (!rotate180(800)) return false;
+  if (!rotate180(700)) return false;
   return searchAndCenterLine();
 }
 
@@ -732,7 +732,7 @@ void loop() {
     isGripperOpen = !isGripperOpen;
 
     // rotate and search
-    if (!rotate180(1000)) return;
+    if (!rotate180(800)) return;
     if (!searchAndCenterLine()) return;
 
     followLineWithTarget(7);
@@ -740,7 +740,7 @@ void loop() {
     openGripper(isGripperOpen);
     if (waitOrStop(5000)) return;
     isGripperOpen = !isGripperOpen;
-    sendArmCommand(colorRes);
+    // sendArmCommand(colorRes);
     // path 1 -- end
 
     if (!returnToCheckpoint()) return;
@@ -768,7 +768,7 @@ void loop() {
     openGripper(isGripperOpen);
     if (waitOrStop(5000)) return;
     isGripperOpen = !isGripperOpen;
-    sendArmCommand(colorRes);
+    // sendArmCommand(colorRes);
     if (!returnToCheckpoint()) return;
     // path 2 -- end
 
@@ -793,7 +793,7 @@ void loop() {
     openGripper(isGripperOpen);
     if (waitOrStop(5000)) return;
     isGripperOpen = !isGripperOpen;
-    sendArmCommand(colorRes);
+    // sendArmCommand(colorRes);
     if (!returnToCheckpoint()) return;
     // path 3 -- end
 
@@ -803,7 +803,7 @@ void loop() {
 
   // left button
   if (key == 68) {
-    strafeLeft(3000);
+    if (!returnToCheckpoint()) return;
   }
 
   // front button
