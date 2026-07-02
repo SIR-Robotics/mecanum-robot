@@ -127,19 +127,50 @@ bool connectEsp32Wifi() {
   return false;
 }
 
-void fetchRed() {
-  Serial.println("RUN_RED");
-  espSerial.println("RUN_RED");
+bool runArmCommand(const char* command, const char* okResponse, const char* failResponse) {
+  while (espSerial.available()) espSerial.read();
+
+  Serial.println(command);
+  espSerial.listen();
+  espSerial.println(command);
+  espSerial.flush();
+
+  unsigned long startMs = millis();
+  String line;
+  while (millis() - startMs < 5000) {
+    if (stopRequested()) return false;
+
+    while (espSerial.available()) {
+      char c = espSerial.read();
+      if (c == '\n') {
+        line.trim();
+        if (line.length() > 0) {
+          Serial.print("ESP32: ");
+          Serial.println(line);
+          if (line == okResponse) return true;
+          if (line == failResponse) return false;
+        }
+        line = "";
+      } else if (c != '\r') {
+        line += c;
+      }
+    }
+  }
+
+  Serial.println("ESP32 arm command timeout.");
+  return false;
 }
 
-void fetchBlue() {
-  Serial.println("RUN_BLUE");
-  espSerial.println("RUN_BLUE");
+bool fetchRed() {
+  return runArmCommand("RUN_RED", "ARM_RED_OK", "ARM_RED_FAIL");
 }
 
-void fetchYellow() {
-   Serial.println("RUN_YELLOW");
-  espSerial.println("RUN_YELLOW");
+bool fetchBlue() {
+  return runArmCommand("RUN_BLUE", "ARM_BLUE_OK", "ARM_BLUE_FAIL");
+}
+
+bool fetchYellow() {
+  return runArmCommand("RUN_YELLOW", "ARM_YELLOW_OK", "ARM_YELLOW_FAIL");
 }
 
 void turnRight90() {
@@ -156,7 +187,7 @@ void turnRight90() {
 }
 
 void strafeLeft(int ms) {
-  speed_Upper_L = speed_Lower_L = speed_Upper_R = speed_Lower_R = CORRECTION_SPEED;
+  // speed_Upper_L = speed_Lower_L = speed_Upper_R = speed_Lower_R = CORRECTION_SPEED;
   robot.L_Move();
   delay(ms);
   robot.Stop();
@@ -671,8 +702,9 @@ void loop() {
     int colorRes = gripAndIdentifyColor(isGripperOpen);
     if (waitOrStop(5000)) return;
     isGripperOpen = !isGripperOpen;
-    if (!rotate180()) return;
 
+    // rotate and search
+    if (!rotate180()) return;
     if (!searchAndCenterLine()) return;
 
     followLineWithTarget(7);
@@ -680,25 +712,42 @@ void loop() {
     openGripper(isGripperOpen);
     if (waitOrStop(5000)) return;
     isGripperOpen = !isGripperOpen;
-     if (colorRes == 0) {
-        fetchBlue();
-      } else if (colorRes == 1) {
-        fetchRed();
-      } else if (colorRes == 2) {
-        fetchYellow();
-      }
+    bool armStarted = false;
+    if (colorRes == 0) {
+      armStarted = fetchBlue();
+    } else if (colorRes == 1) {
+      armStarted = fetchRed();
+    } else if (colorRes == 2) {
+      armStarted = fetchYellow();
+    }
+    if (!armStarted) return;
     delay(2000);
     // robot.Back();
-    robotReverse(2000);
+    robotReverse(1500);
     // delay(2000);
-    rotate180();
+
+    // rotate and search (return after sending)
+    if (!rotate180()) return;
+    if (!searchAndCenterLine()) return;
+
 
     // path 2
-    strafeLeft(3000);
+    strafeLeft(1000);
     followLineWithDistance();
     if (stopAll) return;
     robot.Stop();
     Serial.println("Done.");
+  }
+
+  // left button
+  if (key == 68) {
+    strafeLeft(3000);
+  }
+
+  // front button
+
+  if (key == 70) {
+    fetchBlue();
   }
 
   if (key == 12) {
