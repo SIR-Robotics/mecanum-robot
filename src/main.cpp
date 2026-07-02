@@ -567,9 +567,9 @@ bool searchAndCenterLine(uint16_t timeoutMs = 0) {
 
  // All sensors are white: line is lost.
 // Aggressive search pattern:
-// 1. fast turn left
-// 2. fast turn right longer
-// 3. fast turn left longer
+// 1. fast turn right
+// 2. brief turn left if it overshot
+// 3. fast turn right longer
 // 4. creep forward slightly
 // repeat
 unsigned long stepElapsed = millis() - searchStepStartMs;
@@ -577,25 +577,25 @@ unsigned long stepElapsed = millis() - searchStepStartMs;
 speed_Upper_L = speed_Lower_L = speed_Upper_R = speed_Lower_R = LINE_SEARCH_SPEED;
 
 if (searchStep == 0) {
-  robot.Turn_Left();
+  robot.Turn_Right();
 
-  if (stepElapsed >= 350) {
+  if (stepElapsed >= 500) {
     searchStep = 1;
     searchStepStartMs = millis();
   }
 } 
 else if (searchStep == 1) {
-  robot.Turn_Right();
+  robot.Turn_Left();
 
-  if (stepElapsed >= 800) {
+  if (stepElapsed >= 250) {
     searchStep = 2;
     searchStepStartMs = millis();
   }
 } 
 else if (searchStep == 2) {
-  robot.Turn_Left();
+  robot.Turn_Right();
 
-  if (stepElapsed >= 800) {
+  if (stepElapsed >= 1000) {
     searchStep = 3;
     searchStepStartMs = millis();
   }
