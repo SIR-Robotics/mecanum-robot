@@ -670,7 +670,7 @@ delay(LINE_TICK_MS);
 
 bool returnToCheckpoint() {
   robotReverse(1500);
-  if (!rotate180(1000)) return false;
+  if (!rotate180(800)) return false;
   return searchAndCenterLine();
 }
 
@@ -744,10 +744,10 @@ void loop() {
     // path 1 -- end
 
     if (!returnToCheckpoint()) return;
-
+    if (!searchAndCenterLine()) return;
 
     // path 2 -- start
-    strafeLeft(1000);
+    strafeLeft(800);
     if (!searchAndCenterLine()) return;
     followLineWithDistance();
     if (stopAll) return;
@@ -757,11 +757,11 @@ void loop() {
     if (waitOrStop(5000)) return;
     isGripperOpen = !isGripperOpen;
 
-    if (!rotate180(1200)) return;
+    if (!rotate180(100)) return;
     if (!searchAndCenterLine()) return;
     followLineWithTarget(2);
     if (stopAll) return;
-    strafeLeft(1000);
+    strafeLeft(800);
     if (!searchAndCenterLine()) return;
     followLineWithTarget(5);
     if (stopAll) return;
@@ -773,7 +773,7 @@ void loop() {
     // path 2 -- end
 
     // path 3 -- start
-    strafeRight(1000);
+    strafeRight(800);
     if (!searchAndCenterLine()) return;
     followLineWithDistance();
     if (stopAll) return;
@@ -782,11 +782,11 @@ void loop() {
     if (waitOrStop(5000)) return;
     isGripperOpen = !isGripperOpen;
 
-    if (!rotate180(1200)) return;
+    if (!rotate180(1000)) return;
     if (!searchAndCenterLine()) return;
     followLineWithTarget(2);
     if (stopAll) return;
-    strafeRight(1000);
+    strafeRight(800);
     if (!searchAndCenterLine()) return;
     followLineWithTarget(5);
     if (stopAll) return;
