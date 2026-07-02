@@ -173,6 +173,20 @@ bool fetchYellow() {
   return runArmCommand("RUN_YELLOW", "ARM_YELLOW_OK", "ARM_YELLOW_FAIL");
 }
 
+void sendArmCommand(int colorRes) {
+  const char* command = nullptr;
+  if (colorRes == 0) command = "RUN_BLUE";
+  else if (colorRes == 1) command = "RUN_RED";
+  else if (colorRes == 2) command = "RUN_YELLOW";
+  if (!command) return;
+
+  while (espSerial.available()) espSerial.read();
+  Serial.println(command);
+  espSerial.listen();
+  espSerial.println(command);
+  espSerial.flush();
+}
+
 void turnRight90() {
   Serial.println("Turning right 90 degrees...");
   speed_Upper_L = speed_Lower_L = speed_Upper_R = speed_Lower_R = TURNING_SPEED;
@@ -187,7 +201,7 @@ void turnRight90() {
 }
 
 void strafeLeft(int ms) {
-  // speed_Upper_L = speed_Lower_L = speed_Upper_R = speed_Lower_R = CORRECTION_SPEED;
+  speed_Upper_L = speed_Lower_L = speed_Upper_R = speed_Lower_R = 60;
   robot.L_Move();
   delay(ms);
   robot.Stop();
@@ -696,7 +710,7 @@ void loop() {
   // challenge 3
   if (key == 13) {
     stopAll = false;
-    // path 1
+    // path 1 -- start
     followLineWithDistance();
     if (stopAll) return;
     int colorRes = gripAndIdentifyColor(isGripperOpen);
@@ -712,29 +726,30 @@ void loop() {
     openGripper(isGripperOpen);
     if (waitOrStop(5000)) return;
     isGripperOpen = !isGripperOpen;
-    bool armStarted = false;
-    if (colorRes == 0) {
-      armStarted = fetchBlue();
-    } else if (colorRes == 1) {
-      armStarted = fetchRed();
-    } else if (colorRes == 2) {
-      armStarted = fetchYellow();
-    }
-    if (!armStarted) return;
-    delay(2000);
-    // robot.Back();
+    sendArmCommand(colorRes);
+    // path 1 -- end
+
+    // return to checkpoint
     robotReverse(1500);
-    // delay(2000);
 
     // rotate and search (return after sending)
     if (!rotate180()) return;
     if (!searchAndCenterLine()) return;
 
 
-    // path 2
+    // path 2 -- start
     strafeLeft(1000);
     followLineWithDistance();
     if (stopAll) return;
+    // grip and check color 
+    // rotate180();
+    // followLineWithTarget(4);
+    // strafeLeft(1000);
+    // followLineWithTarget(4);
+    // then it will return to checkpoint back
+    // path 2 -- end
+
+
     robot.Stop();
     Serial.println("Done.");
   }
