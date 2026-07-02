@@ -207,6 +207,13 @@ void strafeLeft(int ms) {
   robot.Stop();
 }
 
+void strafeRight(int ms) {
+  speed_Upper_L = speed_Lower_L = speed_Upper_R = speed_Lower_R = 60;
+  robot.R_Move();
+  delay(ms);
+  robot.Stop();
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 
 // ── Basic 3-sensor line-follow (KS0560 lesson_6 pattern) ─────────────────────
@@ -764,6 +771,31 @@ void loop() {
     sendArmCommand(colorRes);
     if (!returnToCheckpoint()) return;
     // path 2 -- end
+
+    // path 3 -- start
+    strafeRight(1000);
+    if (!searchAndCenterLine()) return;
+    followLineWithDistance();
+    if (stopAll) return;
+    colorRes = gripAndIdentifyColor(isGripperOpen);
+    if (colorRes < 0) return;
+    if (waitOrStop(5000)) return;
+    isGripperOpen = !isGripperOpen;
+
+    if (!rotate180(1200)) return;
+    if (!searchAndCenterLine()) return;
+    followLineWithTarget(2);
+    if (stopAll) return;
+    strafeRight(1000);
+    if (!searchAndCenterLine()) return;
+    followLineWithTarget(5);
+    if (stopAll) return;
+    openGripper(isGripperOpen);
+    if (waitOrStop(5000)) return;
+    isGripperOpen = !isGripperOpen;
+    sendArmCommand(colorRes);
+    if (!returnToCheckpoint()) return;
+    // path 3 -- end
 
     robot.Stop();
     Serial.println("Done.");
