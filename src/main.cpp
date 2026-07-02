@@ -33,7 +33,7 @@ const uint8_t  LEFT_SPEED           = 40;   // advance speed, left side
 const uint8_t  RIGHT_SPEED          = 42;   // advance speed, right side (trim for asymmetry)
 const uint8_t  LINE_TURN_SPEED      = 25;   // spin speed for line-follow corrections
 const uint8_t  LINE_TICK_MS         = 10;   // follow-loop tick delay
-const uint16_t OBSTACLE_DISTANCE_CM = 6;
+const uint16_t OBSTACLE_DISTANCE_CM = 7;
 const uint16_t ULTRASONIC_SAMPLE_MS = 50;
 const uint32_t ULTRASONIC_TIMEOUT_US = 12000;
 const uint8_t  LINE_SEARCH_SPEED    = 40;   // aggressive turning when line is lost
@@ -128,14 +128,17 @@ bool connectEsp32Wifi() {
 }
 
 void fetchRed() {
+  Serial.println("RUN_RED");
   espSerial.println("RUN_RED");
 }
 
 void fetchBlue() {
+  Serial.println("RUN_BLUE");
   espSerial.println("RUN_BLUE");
 }
 
 void fetchYellow() {
+   Serial.println("RUN_YELLOW");
   espSerial.println("RUN_YELLOW");
 }
 
@@ -244,7 +247,7 @@ void openGripper(bool state) {
     servo.write(180);
     Serial.println("Gripper: close");
   } else {
-    servo.write(30);
+    servo.write(5);
     Serial.println("Gripper: open");
   }
 }
@@ -277,22 +280,44 @@ bool waitOrStop(uint16_t ms) {
   return false;
 }
 
-void gripAndIdentifyColor(bool gOpen) {
-  if (stopRequested()) return;
+// void gripAndIdentifyColor(bool gOpen) {
+//   if (stopRequested()) return;
+
+//   Serial.println("Checking TCS3200 color...");
+//   ColorLabel label = classifyColor();
+
+//   delay(1000);
+//   // servo.write(180);
+//   openGripper(gOpen);
+
+//   if (label == ColorLabel::Blue) {
+//     Serial.println("Blue detected. Gripper closed at 180.");
+//   } else if (label == ColorLabel::Red) {
+//     Serial.println("Red detected. Gripper closed at 180.");
+//   } else {
+//     Serial.println("Yellow detected. Gripper closed at 180.");
+//   }
+// }
+
+int gripAndIdentifyColor(bool gOpen) {
+  if (stopRequested()) return -1;
 
   Serial.println("Checking TCS3200 color...");
   ColorLabel label = classifyColor();
 
-  delay(1000);
   // servo.write(180);
   openGripper(gOpen);
+  delay(1000);
 
   if (label == ColorLabel::Blue) {
     Serial.println("Blue detected. Gripper closed at 180.");
+    return 0;
   } else if (label == ColorLabel::Red) {
     Serial.println("Red detected. Gripper closed at 180.");
+    return 1;
   } else {
     Serial.println("Yellow detected. Gripper closed at 180.");
+    return 2;
   }
 }
 
@@ -450,6 +475,14 @@ void followLineWithDistance() {
 
     delay(LINE_TICK_MS);
   }
+}
+
+void robotReverse(int ms) {
+  speed_Upper_L = speed_Lower_L = LEFT_SPEED;
+  speed_Upper_R = speed_Lower_R = RIGHT_SPEED;
+  robot.Back();
+  delay(ms);
+  robot.Stop();
 }
 
 bool searchAndCenterLine(uint16_t timeoutMs = 0) {
@@ -632,9 +665,10 @@ void loop() {
   // challenge 3
   if (key == 13) {
     stopAll = false;
+    // path 1
     followLineWithDistance();
     if (stopAll) return;
-    gripAndIdentifyColor(isGripperOpen);
+    int colorRes = gripAndIdentifyColor(isGripperOpen);
     if (waitOrStop(5000)) return;
     isGripperOpen = !isGripperOpen;
     if (!rotate180()) return;
@@ -646,7 +680,25 @@ void loop() {
     openGripper(isGripperOpen);
     if (waitOrStop(5000)) return;
     isGripperOpen = !isGripperOpen;
-    fetchBlue();
+     if (colorRes == 0) {
+        fetchBlue();
+      } else if (colorRes == 1) {
+        fetchRed();
+      } else if (colorRes == 2) {
+        fetchYellow();
+      }
+    delay(2000);
+    // robot.Back();
+    robotReverse(2000);
+    // delay(2000);
+    rotate180();
+
+    // path 2
+    strafeLeft(3000);
+    followLineWithDistance();
+    if (stopAll) return;
+    robot.Stop();
+    Serial.println("Done.");
   }
 
   if (key == 12) {
