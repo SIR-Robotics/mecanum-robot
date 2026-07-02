@@ -276,11 +276,11 @@ void followLineWithTarget(int targetCount) {
 // Simple timed 180° right turn. Tune ROTATE180_MS at the top of the file
 // until the robot lands facing 180° reliably. Returns false if STOP is
 // pressed mid-turn, true otherwise.
-bool rotate180() {
+bool rotate180(int ms) {
   Serial.println("Rotating 180 degrees...");
   speed_Upper_L = speed_Lower_L = speed_Upper_R = speed_Lower_R = TURNING_SPEED;
   robot.Turn_Right();
-  bool stopped = waitOrStop(ROTATE180_MS);
+  bool stopped = waitOrStop(ms);
   robot.Stop();
   return !stopped;
 }
@@ -661,6 +661,12 @@ delay(LINE_TICK_MS);
   }
 }
 
+bool returnToCheckpoint() {
+  robotReverse(1500);
+  if (!rotate180(1000)) return false;
+  return searchAndCenterLine();
+}
+
 void setup() {
   pinMode(LINE_LEFT_PIN,   INPUT);
   pinMode(LINE_MIDDLE_PIN, INPUT);
@@ -700,7 +706,7 @@ void loop() {
     followLineWithTarget(2);
     strafeLeft(1000);
     followLineWithTarget(4);
-    if (!rotate180()) return;
+    if (!rotate180(1000)) return;
     followLineWithTarget(3);
     robot.right_led(true);
     robot.left_led(true);
@@ -715,10 +721,11 @@ void loop() {
     if (stopAll) return;
     int colorRes = gripAndIdentifyColor(isGripperOpen);
     if (waitOrStop(5000)) return;
+    delay(300);
     isGripperOpen = !isGripperOpen;
 
     // rotate and search
-    if (!rotate180()) return;
+    if (!rotate180(1000)) return;
     if (!searchAndCenterLine()) return;
 
     followLineWithTarget(7);
@@ -729,26 +736,34 @@ void loop() {
     sendArmCommand(colorRes);
     // path 1 -- end
 
-    // return to checkpoint
-    robotReverse(1500);
-
-    // rotate and search (return after sending)
-    if (!rotate180()) return;
-    if (!searchAndCenterLine()) return;
+    if (!returnToCheckpoint()) return;
 
 
     // path 2 -- start
     strafeLeft(1000);
+    if (!searchAndCenterLine()) return;
     followLineWithDistance();
     if (stopAll) return;
-    // grip and check color 
-    // rotate180();
-    // followLineWithTarget(4);
-    // strafeLeft(1000);
-    // followLineWithTarget(4);
-    // then it will return to checkpoint back
-    // path 2 -- end
+    // delay(400);
+    colorRes = gripAndIdentifyColor(isGripperOpen);
+    if (colorRes < 0) return;
+    if (waitOrStop(5000)) return;
+    isGripperOpen = !isGripperOpen;
 
+    if (!rotate180(1200)) return;
+    if (!searchAndCenterLine()) return;
+    followLineWithTarget(2);
+    if (stopAll) return;
+    strafeLeft(1000);
+    if (!searchAndCenterLine()) return;
+    followLineWithTarget(5);
+    if (stopAll) return;
+    openGripper(isGripperOpen);
+    if (waitOrStop(5000)) return;
+    isGripperOpen = !isGripperOpen;
+    sendArmCommand(colorRes);
+    if (!returnToCheckpoint()) return;
+    // path 2 -- end
 
     robot.Stop();
     Serial.println("Done.");
