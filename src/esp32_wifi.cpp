@@ -2,13 +2,11 @@
 // pio run -e esp32 -t upload
 
 #include <Arduino.h>
-#include <HTTPClient.h>
 #include <PubSubClient.h>
 #include <WiFi.h>
 
 const char* WIFI_SSID = "ASEM Training";
 const char* WIFI_PASS = "Class@Asem";
-const char* ARM_API_BASE = "http://10.4.0.99";
 
 const char* MQTT_HOST = "mqtt.favoriot.com";
 const uint16_t MQTT_PORT = 1883;
@@ -20,6 +18,13 @@ PubSubClient mqtt(wifiClient);
 const uint8_t UNO_RX_PIN = 16;
 const uint8_t UNO_TX_PIN = 17;
 const uint32_t UNO_BAUD = 9600;
+
+uint32_t nextArmRequestId = 1;
+uint32_t lastArmResultId = 0;
+bool lastArmResultOk = false;
+String queuedColor;
+
+void connectFavoriot();
 
 String rpcTopic() {
   return String(DEVICE_ACCESS_TOKEN) + "/v2/rpc";
@@ -49,40 +54,58 @@ void report(const char* message) {
   publishFavoriot("status", message);
 }
 
-bool runArmApi(const char* path) {
-  if (WiFi.status() != WL_CONNECTED) return false;
+long readJsonLong(const String& message, const char* key) {
+  int keyPos = message.indexOf(key);
+  if (keyPos < 0) return -1;
 
-  HTTPClient http;
-  String url = String(ARM_API_BASE) + path;
-  http.begin(url);
-  int code = http.POST("");
-  http.end();
+  int colon = message.indexOf(':', keyPos);
+  if (colon < 0) return -1;
 
-  return code >= 200 && code < 300;
+  return message.substring(colon + 1).toInt();
 }
 
-bool fetchRed() {
-  return runArmApi("/api/run/red");
+bool publishArmCommand(const char* color, uint32_t id) {
+  if (!mqtt.connected()) return false;
+
+  char payload[80];
+  snprintf(payload, sizeof(payload), "{\"to\":\"arm\",\"command\":\"%s\",\"id\":%lu}",
+           color, (unsigned long)id);
+  return mqtt.publish(rpcTopic().c_str(), payload);
 }
 
-bool fetchBlue() {
-  return runArmApi("/api/run/blue");
+bool waitForArmResult(uint32_t id, uint32_t timeoutMs = 15000) {
+  unsigned long startMs = millis();
+  while (millis() - startMs < timeoutMs) {
+    connectFavoriot();
+    mqtt.loop();
+    if (lastArmResultId == id) return lastArmResultOk;
+    delay(10);
+  }
+  return false;
 }
 
-bool fetchYellow() {
-  return runArmApi("/api/run/yellow");
-}
-
-void runColor(const char* color) {
-  bool ok = false;
-  if (strcmp(color, "red") == 0) ok = fetchRed();
-  else if (strcmp(color, "blue") == 0) ok = fetchBlue();
-  else if (strcmp(color, "yellow") == 0) ok = fetchYellow();
-  else return;
+bool runColor(const char* color) {
+  connectFavoriot();
+  uint32_t id = nextArmRequestId++;
+  lastArmResultId = 0;
+  bool ok = publishArmCommand(color, id) && waitForArmResult(id);
 
   char result[24];
   snprintf(result, sizeof(result), "%s_%s", color, ok ? "ok" : "fail");
   publishFavoriot("arm", result);
+  return ok;
+}
+
+bool fetchRed() {
+  return runColor("red");
+}
+
+bool fetchBlue() {
+  return runColor("blue");
+}
+
+bool fetchYellow() {
+  return runColor("yellow");
 }
 
 void handleUnoCommand(const String& command) {
@@ -100,9 +123,20 @@ void handleFavoriotMessage(char* topic, byte* payload, unsigned int length) {
   message.toLowerCase();
   Serial.printf("Favoriot %s: %s\n", topic, message.c_str());
 
-  if (message.indexOf("red") >= 0) runColor("red");
-  else if (message.indexOf("blue") >= 0) runColor("blue");
-  else if (message.indexOf("yellow") >= 0) runColor("yellow");
+  if (message.indexOf("\"to\":\"mecanum\"") >= 0) {
+    long id = readJsonLong(message, "\"id\"");
+    if (id >= 0) {
+      lastArmResultId = (uint32_t)id;
+      lastArmResultOk = message.indexOf("_ok") >= 0;
+    }
+    return;
+  }
+
+  if (message.indexOf("\"to\":\"arm\"") >= 0) return;
+
+  if (message.indexOf("red") >= 0) queuedColor = "red";
+  else if (message.indexOf("blue") >= 0) queuedColor = "blue";
+  else if (message.indexOf("yellow") >= 0) queuedColor = "yellow";
 }
 
 void readUnoCommands() {
@@ -181,6 +215,12 @@ void loop() {
 
   connectFavoriot();
   mqtt.loop();
+
+  if (queuedColor.length() > 0) {
+    String color = queuedColor;
+    queuedColor = "";
+    runColor(color.c_str());
+  }
 
   if (millis() - lastReportMs >= 5000) {
     lastReportMs = millis();
