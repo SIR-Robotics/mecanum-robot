@@ -1,5 +1,5 @@
 // To flash this code, run:
-// pio run -e esp32 -t upload
+// pio run -e esp32 -t upload --upload-port /dev/cu.usbserial-0001
 
 #include <Arduino.h>
 #include <PubSubClient.h>
@@ -180,26 +180,27 @@ void connectFavoriot() {
   static unsigned long lastAttemptMs = 0;
 
   if (!favoriotConfigured() || WiFi.status() != WL_CONNECTED || mqtt.connected()) return;
-  if (millis() - lastAttemptMs < 3000) return;
+  if (lastAttemptMs != 0 && millis() - lastAttemptMs < 3000) return;
   lastAttemptMs = millis();
 
   String clientId = "esp32-" + String((uint32_t)ESP.getEfuseMac(), HEX);
   Serial.println("Connecting to Favoriot MQTT...");
   if (mqtt.connect(clientId.c_str(), DEVICE_ACCESS_TOKEN, DEVICE_ACCESS_TOKEN)) {
     mqtt.subscribe(rpcTopic().c_str());
-    publishFavoriot("status", "online");
-    Serial.println("Favoriot MQTT connected");
+    report("MQTT_CONNECTED");
   } else {
     Serial.printf("Favoriot MQTT failed: %d\n", mqtt.state());
+    report("MQTT_FAILED");
   }
 }
 
 void setup() {
   Serial.begin(115200);
   unoSerial.begin(UNO_BAUD, SERIAL_8N1, UNO_RX_PIN, UNO_TX_PIN);
-  connectWifi();
   mqtt.setServer(MQTT_HOST, MQTT_PORT);
   mqtt.setCallback(handleFavoriotMessage);
+  connectWifi();
+  connectFavoriot();
 }
 
 void loop() {

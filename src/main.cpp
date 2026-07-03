@@ -105,6 +105,7 @@ bool connectEsp32Wifi() {
   Serial.println("Waiting for ESP32 WiFi...");
 
   unsigned long startMs = millis();
+  bool wifiConnected = false;
   String line;
   while (millis() - startMs < 20000) {
     while (espSerial.available()) {
@@ -114,7 +115,9 @@ bool connectEsp32Wifi() {
         if (line.length() > 0) {
           Serial.print("ESP32: ");
           Serial.println(line);
-          if (line.startsWith("WIFI_CONNECTED")) return true;
+          if (line.startsWith("WIFI_CONNECTED")) wifiConnected = true;
+          if (line.startsWith("MQTT_CONNECTED")) return true;
+          if (line.startsWith("MQTT_FAILED")) return wifiConnected;
           if (line.startsWith("WIFI_FAILED")) return false;
         }
         line = "";
@@ -123,8 +126,8 @@ bool connectEsp32Wifi() {
       }
     }
   }
-  Serial.println("ESP32 not responding.");
-  return false;
+  if (!wifiConnected) Serial.println("ESP32 not responding.");
+  return wifiConnected;
 }
 
 bool runArmCommand(const char* command, const char* okResponse, const char* failResponse) {
