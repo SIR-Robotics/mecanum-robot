@@ -1,20 +1,60 @@
+// To flash this code, run:
+// pio run -e esp32 -t upload
+
 #include <Arduino.h>
 #include <HTTPClient.h>
+#include <PubSubClient.h>
 #include <WiFi.h>
 
 const char* WIFI_SSID = "ASEM Training";
 const char* WIFI_PASS = "Class@Asem";
 const char* ARM_API_BASE = "http://10.4.0.99";
 
+#ifndef DEVICE_DEVELOPER_ID
+#define DEVICE_DEVELOPER_ID "YOUR_DEVICE_DEVELOPER_ID"
+#endif
+
+#ifndef DEVICE_ACCESS_TOKEN
+#define DEVICE_ACCESS_TOKEN ""
+#endif
+
+const char* MQTT_HOST = "mqtt.favoriot.com";
+const uint16_t MQTT_PORT = 1883;
+
 HardwareSerial unoSerial(2);
+WiFiClient wifiClient;
+PubSubClient mqtt(wifiClient);
 
 const uint8_t UNO_RX_PIN = 16;
 const uint8_t UNO_TX_PIN = 17;
 const uint32_t UNO_BAUD = 9600;
 
+String rpcTopic() {
+  return String(DEVICE_ACCESS_TOKEN) + "/v2/rpc";
+}
+
+String streamTopic() {
+  return String(DEVICE_ACCESS_TOKEN) + "/v2/streams";
+}
+
+bool favoriotConfigured() {
+  return DEVICE_ACCESS_TOKEN[0] != '\0';
+}
+
+void publishFavoriot(const char* key, const char* value) {
+  if (!mqtt.connected()) return;
+
+  char payload[180];
+  snprintf(payload, sizeof(payload),
+           "{\"device_developer_id\":\"%s\",\"data\":{\"%s\":\"%s\"}}",
+           DEVICE_DEVELOPER_ID, key, value);
+  mqtt.publish(streamTopic().c_str(), payload);
+}
+
 void report(const char* message) {
   Serial.println(message);
   unoSerial.println(message);
+  publishFavoriot("status", message);
 }
 
 bool runArmApi(const char* path) {
@@ -41,6 +81,18 @@ bool fetchYellow() {
   return runArmApi("/api/run/yellow");
 }
 
+void runColor(const char* color) {
+  bool ok = false;
+  if (strcmp(color, "red") == 0) ok = fetchRed();
+  else if (strcmp(color, "blue") == 0) ok = fetchBlue();
+  else if (strcmp(color, "yellow") == 0) ok = fetchYellow();
+  else return;
+
+  char result[24];
+  snprintf(result, sizeof(result), "%s_%s", color, ok ? "ok" : "fail");
+  publishFavoriot("arm", result);
+}
+
 void handleUnoCommand(const String& command) {
   if (command == "RUN_RED") {
     report(fetchRed() ? "ARM_RED_OK" : "ARM_RED_FAIL");
@@ -49,6 +101,16 @@ void handleUnoCommand(const String& command) {
   } else if (command == "RUN_YELLOW") {
     report(fetchYellow() ? "ARM_YELLOW_OK" : "ARM_YELLOW_FAIL");
   }
+}
+
+void handleFavoriotMessage(char* topic, byte* payload, unsigned int length) {
+  String message((const char*)payload, length);
+  message.toLowerCase();
+  Serial.printf("Favoriot %s: %s\n", topic, message.c_str());
+
+  if (message.indexOf("red") >= 0) runColor("red");
+  else if (message.indexOf("blue") >= 0) runColor("blue");
+  else if (message.indexOf("yellow") >= 0) runColor("yellow");
 }
 
 void readUnoCommands() {
@@ -88,10 +150,30 @@ void connectWifi() {
   }
 }
 
+void connectFavoriot() {
+  static unsigned long lastAttemptMs = 0;
+
+  if (!favoriotConfigured() || WiFi.status() != WL_CONNECTED || mqtt.connected()) return;
+  if (millis() - lastAttemptMs < 3000) return;
+  lastAttemptMs = millis();
+
+  String clientId = "esp32-" + String((uint32_t)ESP.getEfuseMac(), HEX);
+  Serial.println("Connecting to Favoriot MQTT...");
+  if (mqtt.connect(clientId.c_str(), DEVICE_ACCESS_TOKEN, DEVICE_ACCESS_TOKEN)) {
+    mqtt.subscribe(rpcTopic().c_str());
+    publishFavoriot("status", "online");
+    Serial.println("Favoriot MQTT connected");
+  } else {
+    Serial.printf("Favoriot MQTT failed: %d\n", mqtt.state());
+  }
+}
+
 void setup() {
   Serial.begin(115200);
   unoSerial.begin(UNO_BAUD, SERIAL_8N1, UNO_RX_PIN, UNO_TX_PIN);
   connectWifi();
+  mqtt.setServer(MQTT_HOST, MQTT_PORT);
+  mqtt.setCallback(handleFavoriotMessage);
 }
 
 void loop() {
@@ -104,6 +186,9 @@ void loop() {
     connectWifi();
     lastReportMs = millis();
   }
+
+  connectFavoriot();
+  mqtt.loop();
 
   if (millis() - lastReportMs >= 5000) {
     lastReportMs = millis();
