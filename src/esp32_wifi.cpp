@@ -10,14 +10,6 @@ const char* WIFI_SSID = "ASEM Training";
 const char* WIFI_PASS = "Class@Asem";
 const char* ARM_API_BASE = "http://10.4.0.99";
 
-#ifndef DEVICE_DEVELOPER_ID
-#define DEVICE_DEVELOPER_ID "YOUR_DEVICE_DEVELOPER_ID"
-#endif
-
-#ifndef DEVICE_ACCESS_TOKEN
-#define DEVICE_ACCESS_TOKEN ""
-#endif
-
 const char* MQTT_HOST = "mqtt.favoriot.com";
 const uint16_t MQTT_PORT = 1883;
 

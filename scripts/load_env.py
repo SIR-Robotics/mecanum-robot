@@ -2,11 +2,17 @@ Import("env")
 
 from pathlib import Path
 
-keys = {"DEVICE_DEVELOPER_ID", "DEVICE_ACCESS_TOKEN"}
+keys = {
+    "DEVELOPER_ID": "DEVICE_DEVELOPER_ID",
+    "ACCESS_TOKEN": "DEVICE_ACCESS_TOKEN",
+    "DEVICE_DEVELOPER_ID": "DEVICE_DEVELOPER_ID",
+    "DEVICE_ACCESS_TOKEN": "DEVICE_ACCESS_TOKEN",
+}
 env_file = Path(env["PROJECT_DIR"]) / ".env"
+found = set()
 
 if env_file.exists():
-    defines = []
+    flags = []
     for line in env_file.read_text().splitlines():
         line = line.strip()
         if not line or line.startswith("#") or "=" not in line:
@@ -16,6 +22,12 @@ if env_file.exists():
         key = key.strip()
         value = value.strip().strip('"').strip("'")
         if key in keys:
-            defines.append((key, env.StringifyMacro(value)))
+            define = keys[key]
+            flags.append(f'-D{define}=\\"{value}\\"')
+            found.add(define)
 
-    env.Append(CPPDEFINES=defines)
+    env.Append(BUILD_FLAGS=flags)
+
+missing = {"DEVICE_DEVELOPER_ID", "DEVICE_ACCESS_TOKEN"} - found
+if missing:
+    raise RuntimeError(f"Missing {', '.join(sorted(missing))} in .env")
