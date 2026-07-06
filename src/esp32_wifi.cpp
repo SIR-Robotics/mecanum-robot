@@ -179,24 +179,30 @@ void connectWifi() {
 void connectFavoriot() {
   static unsigned long lastAttemptMs = 0;
 
-  if (!favoriotConfigured() || WiFi.status() != WL_CONNECTED || mqtt.connected()) return;
+  if (!favoriotConfigured()) {
+    report("MQTT_NOT_CONFIGURED");
+    return;
+  }
+  if (WiFi.status() != WL_CONNECTED || mqtt.connected()) return;
   if (lastAttemptMs != 0 && millis() - lastAttemptMs < 3000) return;
   lastAttemptMs = millis();
 
   String clientId = "esp32-" + String((uint32_t)ESP.getEfuseMac(), HEX);
-  Serial.println("Connecting to Favoriot MQTT...");
+  report("MQTT_CONNECTING");
   if (mqtt.connect(clientId.c_str(), DEVICE_ACCESS_TOKEN, DEVICE_ACCESS_TOKEN)) {
     mqtt.subscribe(rpcTopic().c_str());
     report("MQTT_CONNECTED");
   } else {
-    Serial.printf("Favoriot MQTT failed: %d\n", mqtt.state());
-    report("MQTT_FAILED");
+    char message[24];
+    snprintf(message, sizeof(message), "MQTT_FAILED %d", mqtt.state());
+    report(message);
   }
 }
 
 void setup() {
   Serial.begin(115200);
   unoSerial.begin(UNO_BAUD, SERIAL_8N1, UNO_RX_PIN, UNO_TX_PIN);
+  report("ESP32_FAVORIOT_BOOT");
   mqtt.setServer(MQTT_HOST, MQTT_PORT);
   mqtt.setCallback(handleFavoriotMessage);
   connectWifi();
@@ -225,7 +231,12 @@ void loop() {
 
   if (millis() - lastReportMs >= 5000) {
     lastReportMs = millis();
-    String message = "WIFI_CONNECTED " + WiFi.localIP().toString();
-    report(message.c_str());
+    // String message = "WIFI_CONNECTED " + WiFi.localIP().toString();
+    // report(message.c_str());
+
+    char mqttMessage[32];
+    snprintf(mqttMessage, sizeof(mqttMessage), "MQTT_%s %d",
+             mqtt.connected() ? "CONNECTED" : "DISCONNECTED", mqtt.state());
+    report(mqttMessage);
   }
 }

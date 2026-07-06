@@ -101,6 +101,24 @@ bool stopRequested();
 bool waitOrStop(uint16_t ms);
 void stopEverything();
 
+void logEsp32Messages() {
+  static String line;
+
+  while (espSerial.available()) {
+    char c = espSerial.read();
+    if (c == '\n') {
+      line.trim();
+      if (line.length() > 0) {
+        Serial.print("ESP32: ");
+        Serial.println(line);
+      }
+      line = "";
+    } else if (c != '\r') {
+      line += c;
+    }
+  }
+}
+
 bool connectEsp32Wifi() {
   Serial.println("Waiting for ESP32 WiFi...");
 
@@ -732,6 +750,8 @@ void setup() {
 }
 
 void loop() {
+  logEsp32Messages();
+
   int key = IRreceive.getKey();
 
   // challenge 1
