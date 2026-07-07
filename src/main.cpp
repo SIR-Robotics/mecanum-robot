@@ -970,7 +970,10 @@ void loop() {
     case 13: { // challenge 3
       stopAll = false;
       path1();
-
+      delay(1000);
+      path2();
+      delay(1000);
+      path3();
       robot.Stop();
       Serial.println("Done.");
       break;
@@ -999,6 +1002,10 @@ void loop() {
       // stopAll = false;
       // gripAndIdentifyColor(isGripperOpen);
       path2();
+      break;
+
+    case 24: // button 5
+      path3();
       break;
 
     case 67: // right button
