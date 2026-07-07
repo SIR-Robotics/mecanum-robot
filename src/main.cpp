@@ -26,7 +26,7 @@ const uint8_t TRIG_PIN = 12;
 // Servo Pin
 const uint8_t SERVO_PIN = 9;
 
-const uint8_t  TURNING_SPEED        = 50;
+const uint8_t  TURNING_SPEED        = 42;
 const uint16_t ROTATE180_MS         = 1000; // tune manually — how long TURNING_SPEED gives you 180°
 const uint8_t  CORRECTION_SPEED     = 25;   // used by strafeLeft
 const uint8_t  LEFT_SPEED           = 40;   // advance speed, left side
@@ -100,6 +100,7 @@ ColorLabel classifyColor() {
 bool stopRequested();
 bool waitOrStop(uint16_t ms);
 void stopEverything();
+bool searchAndCenterLine(uint16_t timeoutMs = 0);
 
 void logEsp32Messages() {
   static String line;
@@ -346,14 +347,13 @@ bool rotate180(int ms) {
   return !stopped;
 }
 
-bool rotate90(uint16_t timeoutMs = 2500) {
-  Serial.println("Rotating 90 degrees until straight line...");
+bool rotate90(uint8_t turnSpeed = TURNING_SPEED, uint16_t timeoutMs = 2500) {
+  Serial.println("Rotating 90 degrees until right sensor detects line...");
 
-  const uint8_t STRAIGHT_CONFIRM_TICKS = 5;
-  uint8_t straightTicks = 0;
   unsigned long startMs = millis();
 
-  speed_Upper_L = speed_Lower_L = speed_Upper_R = speed_Lower_R = TURNING_SPEED;
+  speed_Upper_L = speed_Lower_L = speed_Lower_R = turnSpeed;
+  speed_Upper_R = 44;
 
   while (millis() - startMs < timeoutMs) {
     if (stopRequested()) {
@@ -361,27 +361,19 @@ bool rotate90(uint16_t timeoutMs = 2500) {
       return false;
     }
 
-    uint8_t SL = digitalRead(LINE_LEFT_PIN);
-    uint8_t SM = digitalRead(LINE_MIDDLE_PIN);
     uint8_t SR = digitalRead(LINE_RIGHT_PIN);
 
-    if (SL == LOW && SM == HIGH && SR == LOW) {
-      straightTicks++;
-      if (straightTicks >= STRAIGHT_CONFIRM_TICKS) {
-        robot.Stop();
-        Serial.println("Straight line detected.");
-        return true;
-      }
-    } else {
-      straightTicks = 0;
+    if (SR == HIGH) {
+      robot.Stop();
+      Serial.println("Right sensor detected line.");
+      return searchAndCenterLine();
     }
 
     robot.Turn_Right();
     delay(LINE_TICK_MS);
   }
-
   robot.Stop();
-  Serial.println("Rotate 90 timeout. Straight line not detected.");
+  Serial.println("Rotate 90 timeout. Right sensor did not detect line.");
   return false;
 }
 
@@ -392,7 +384,7 @@ void openGripper(bool state) {
     servo.write(180);
     Serial.println("Gripper: close");
   } else {
-    servo.write(5);
+    servo.write(2);
     Serial.println("Gripper: open");
   }
 }
@@ -630,7 +622,7 @@ void robotReverse(int ms) {
   robot.Stop();
 }
 
-bool searchAndCenterLine(uint16_t timeoutMs = 0) {
+bool searchAndCenterLine(uint16_t timeoutMs) {
   Serial.println("Searching and centering on line...");
 
   const uint8_t CENTER_CONFIRM_TICKS = 5;
@@ -793,177 +785,170 @@ void loop() {
 
   int key = IRreceive.getKey();
 
-  // challenge 1
-  if (key == 22) {
-    stopAll = false;
-    followLineWithTarget(7);
-  }
+  switch (key) {
+    case 22: // challenge 1
+      stopAll = false;
+      followLineWithTarget(7);
+      break;
 
-  // challenge 2
-  if (key == 25) {
-    stopAll = false;
-    robot.right_led(false);
-    robot.left_led(false);
-    Serial.println("Following 2 lines...");
-    followLineWithTarget(2);
-    strafeLeft(1000);
-    followLineWithTarget(4);
-    if (!rotate180(1000)) return;
-    followLineWithTarget(3);
-    robot.right_led(true);
-    robot.left_led(true);
-    Serial.println("Done.");
-  }
+    case 25: // challenge 2
+      stopAll = false;
+      robot.right_led(false);
+      robot.left_led(false);
+      Serial.println("Following 2 lines...");
+      followLineWithTarget(2);
+      strafeLeft(1000);
+      followLineWithTarget(4);
+      if (!rotate180(1000)) return;
+      followLineWithTarget(3);
+      robot.right_led(true);
+      robot.left_led(true);
+      Serial.println("Done.");
+      break;
 
-  // challenge 3
-  if (key == 13) {
-    stopAll = false;
-    // path 1 -- start
-    followLineWithDistance();
-    if (stopAll) return;
-    int colorRes = gripAndIdentifyColor(isGripperOpen);
-    if (waitOrStop(5000)) return;
-    delay(300);
-    isGripperOpen = !isGripperOpen;
+    case 13: { // challenge 3
+      stopAll = false;
+      // path 1 -- start
+      followLineWithDistance();
+      if (stopAll) return;
+      int colorRes = gripAndIdentifyColor(isGripperOpen);
+      if (waitOrStop(5000)) return;
+      delay(300);
+      isGripperOpen = !isGripperOpen;
 
-    // rotate and search
-    if (!rotate180(800)) return;
-    if (!searchAndCenterLine()) return;
+      // rotate and search
+      if (!rotate180(800)) return;
+      if (!searchAndCenterLine()) return;
 
-    followLineWithTarget(7);
-    if (stopAll) return;
-    openGripper(isGripperOpen);
-    if (waitOrStop(5000)) return;
-    isGripperOpen = !isGripperOpen;
-    sendArmCommand(colorRes);
-    if (!returnToCheckpoint()) return;
-    if (!searchAndCenterLine()) return;
-    followLineWithTarget(2);
-    // path 1 -- end
+      followLineWithTarget(7);
+      if (stopAll) return;
+      openGripper(isGripperOpen);
+      if (waitOrStop(5000)) return;
+      isGripperOpen = !isGripperOpen;
+      sendArmCommand(colorRes);
+      if (!returnToCheckpoint()) return;
+      if (!searchAndCenterLine()) return;
+      followLineWithTarget(2);
+      // path 1 -- end
 
-    // if (!returnToCheckpoint()) return;
-    // if (!searchAndCenterLine()) return;
-    // // if (!followLineForMs(500)) return;
-    // followLineWithTarget(2);
+      // if (!returnToCheckpoint()) return;
+      // if (!searchAndCenterLine()) return;
+      // // if (!followLineForMs(500)) return;
+      // followLineWithTarget(2);
 
-    // // path 2 -- start
-    // strafeLeft(800);
-    // if (!searchAndCenterLine()) return;
-    // followLineWithDistance();
-    // if (stopAll) return;
-    // // delay(400);
-    // colorRes = gripAndIdentifyColor(isGripperOpen);
-    // if (colorRes < 0) return;
-    // if (waitOrStop(5000)) return;
-    // isGripperOpen = !isGripperOpen;
+      // // path 2 -- start
+      // strafeLeft(800);
+      // if (!searchAndCenterLine()) return;
+      // followLineWithDistance();
+      // if (stopAll) return;
+      // // delay(400);
+      // colorRes = gripAndIdentifyColor(isGripperOpen);
+      // if (colorRes < 0) return;
+      // if (waitOrStop(5000)) return;
+      // isGripperOpen = !isGripperOpen;
 
-    // if (!rotate180(100)) return;
-    // if (!searchAndCenterLine()) return;
-    // followLineWithTarget(2);
-    // if (stopAll) return;
-    // strafeLeft(800);
-    // if (!searchAndCenterLine()) return;
-    // followLineWithTarget(5);
-    // if (stopAll) return;
-    // openGripper(isGripperOpen);
-    // if (waitOrStop(5000)) return;
-    // isGripperOpen = !isGripperOpen;
-    // // sendArmCommand(colorRes);
-    // if (!returnToCheckpoint()) return;
-    // // path 2 -- end
+      // if (!rotate180(100)) return;
+      // if (!searchAndCenterLine()) return;
+      // followLineWithTarget(2);
+      // if (stopAll) return;
+      // strafeLeft(800);
+      // if (!searchAndCenterLine()) return;
+      // followLineWithTarget(5);
+      // if (stopAll) return;
+      // openGripper(isGripperOpen);
+      // if (waitOrStop(5000)) return;
+      // isGripperOpen = !isGripperOpen;
+      // // sendArmCommand(colorRes);
+      // if (!returnToCheckpoint()) return;
+      // // path 2 -- end
 
-    // // path 3 -- start
-    // strafeRight(800);
-    // if (!searchAndCenterLine()) return;
-    // followLineWithDistance();
-    // if (stopAll) return;
-    // colorRes = gripAndIdentifyColor(isGripperOpen);
-    // if (colorRes < 0) return;
-    // if (waitOrStop(5000)) return;
-    // isGripperOpen = !isGripperOpen;
+      // // path 3 -- start
+      // strafeRight(800);
+      // if (!searchAndCenterLine()) return;
+      // followLineWithDistance();
+      // if (stopAll) return;
+      // colorRes = gripAndIdentifyColor(isGripperOpen);
+      // if (colorRes < 0) return;
+      // if (waitOrStop(5000)) return;
+      // isGripperOpen = !isGripperOpen;
 
-    // if (!rotate180(1000)) return;
-    // if (!searchAndCenterLine()) return;
-    // followLineWithTarget(2);
-    // if (stopAll) return;
-    // strafeRight(800);
-    // if (!searchAndCenterLine()) return;
-    // followLineWithTarget(5);
-    // if (stopAll) return;
-    // openGripper(isGripperOpen);
-    // if (waitOrStop(5000)) return;
-    // isGripperOpen = !isGripperOpen;
-    // // sendArmCommand(colorRes);
-    // if (!returnToCheckpoint()) return;
-    // // path 3 -- end
+      // if (!rotate180(1000)) return;
+      // if (!searchAndCenterLine()) return;
+      // followLineWithTarget(2);
+      // if (stopAll) return;
+      // strafeRight(800);
+      // if (!searchAndCenterLine()) return;
+      // followLineWithTarget(5);
+      // if (stopAll) return;
+      // openGripper(isGripperOpen);
+      // if (waitOrStop(5000)) return;
+      // isGripperOpen = !isGripperOpen;
+      // // sendArmCommand(colorRes);
+      // if (!returnToCheckpoint()) return;
+      // // path 3 -- end
 
-    robot.Stop();
-    Serial.println("Done.");
-  }
-
-  // left button
-  if (key == 68) {
-    if (!returnToCheckpoint()) return;
-    if (!searchAndCenterLine()) return;
-    // if (!followLineForMs(500)) return;
-    delay(1000);
-    followLineWithTarget(2);
-    strafeLeft(800);
-    if (!searchAndCenterLine()) return;
-    followLineWithDistance();
-  }
-
-  // front button
-  if (key == 70) {
-    fetchBlue();
-  }
-
-  if (key == 12) {
-    stopAll = false;
-    gripAndIdentifyColor(isGripperOpen);
-  }
-
-  // right button
-  if (key == 67) {
-    rotate90();
-  }
-
-  // Button to test out code - gripper
-  if (key == 82) {
-    static bool gripperOpen = false;
-    gripperOpen = !gripperOpen;
-    openGripper(gripperOpen);
-  }
-
-  // Test for ultrasonic sensor
-  if (key == 74) {
-    Serial.println("Ultrasonic reading started...");
-    while (IRreceive.getKey() != 70) {
-      uint16_t dist = readUltrasonic();
-      if (dist >= 999)
-        Serial.println("Distance: out of range");
-      else {
-        Serial.print("Distance: ");
-        Serial.print(dist);
-        Serial.println(" cm");
-      }
-      delay(250);
+      robot.Stop();
+      Serial.println("Done.");
+      break;
     }
-    Serial.println("Ultrasonic stopped.");
-  }
 
-  // test run robot
-  if (key == 28) {
-    fetchBlue();
-  }
+    case 68: // left button
+      if (!returnToCheckpoint()) return;
+      if (!searchAndCenterLine()) return;
+      // if (!followLineForMs(500)) return;
+      delay(1000);
+      followLineWithTarget(2);
+      strafeLeft(800);
+      if (!searchAndCenterLine()) return;
+      followLineWithDistance();
+      break;
 
-  // stop everything
-  if (key == 70) {
-    robot.Stop();
-    stopAll = true;
-    robot.right_led(false);
-    robot.left_led(false);
-    Serial.println("Stopped.");
-  }
+    case 70: // front button / stop everything
+      fetchBlue();
+      robot.Stop();
+      stopAll = true;
+      robot.right_led(false);
+      robot.left_led(false);
+      Serial.println("Stopped.");
+      break;
 
+    case 12:
+      stopAll = false;
+      gripAndIdentifyColor(isGripperOpen);
+      break;
+
+    case 67: // right button
+      rotate90();
+      break;
+
+    case 82: { // Button to test out code - gripper
+      static bool gripperOpen = false;
+      gripperOpen = !gripperOpen;
+      openGripper(gripperOpen);
+      break;
+    }
+
+    case 74: // Test for ultrasonic sensor
+      Serial.println("Ultrasonic reading started...");
+      while (IRreceive.getKey() != 70) {
+        uint16_t dist = readUltrasonic();
+        if (dist >= 999)
+          Serial.println("Distance: out of range");
+        else {
+          Serial.print("Distance: ");
+          Serial.print(dist);
+          Serial.println(" cm");
+        }
+        delay(250);
+      }
+      Serial.println("Ultrasonic stopped.");
+      break;
+
+    case 28: // test run robot
+      fetchBlue();
+      break;
+
+    default:
+      break;
+  }
 }
