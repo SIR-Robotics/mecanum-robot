@@ -191,7 +191,9 @@ void connectFavoriot() {
   report("MQTT_CONNECTING");
   if (mqtt.connect(clientId.c_str(), DEVICE_ACCESS_TOKEN, DEVICE_ACCESS_TOKEN)) {
     mqtt.subscribe(rpcTopic().c_str());
-    report("MQTT_CONNECTED");
+    report("MQTT_CONNECTED 0");
+    String wifiMessage = "WIFI_CONNECTED " + WiFi.localIP().toString();
+    report(wifiMessage.c_str());
   } else {
     char message[24];
     snprintf(message, sizeof(message), "MQTT_FAILED %d", mqtt.state());
