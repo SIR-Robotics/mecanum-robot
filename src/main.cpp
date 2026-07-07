@@ -346,6 +346,45 @@ bool rotate180(int ms) {
   return !stopped;
 }
 
+bool rotate90(uint16_t timeoutMs = 2500) {
+  Serial.println("Rotating 90 degrees until straight line...");
+
+  const uint8_t STRAIGHT_CONFIRM_TICKS = 5;
+  uint8_t straightTicks = 0;
+  unsigned long startMs = millis();
+
+  speed_Upper_L = speed_Lower_L = speed_Upper_R = speed_Lower_R = TURNING_SPEED;
+
+  while (millis() - startMs < timeoutMs) {
+    if (stopRequested()) {
+      robot.Stop();
+      return false;
+    }
+
+    uint8_t SL = digitalRead(LINE_LEFT_PIN);
+    uint8_t SM = digitalRead(LINE_MIDDLE_PIN);
+    uint8_t SR = digitalRead(LINE_RIGHT_PIN);
+
+    if (SL == LOW && SM == HIGH && SR == LOW) {
+      straightTicks++;
+      if (straightTicks >= STRAIGHT_CONFIRM_TICKS) {
+        robot.Stop();
+        Serial.println("Straight line detected.");
+        return true;
+      }
+    } else {
+      straightTicks = 0;
+    }
+
+    robot.Turn_Right();
+    delay(LINE_TICK_MS);
+  }
+
+  robot.Stop();
+  Serial.println("Rotate 90 timeout. Straight line not detected.");
+  return false;
+}
+
 // ── Servo Gripper ─────────────────────────────────────────────────────────
 
 void openGripper(bool state) {
@@ -875,7 +914,6 @@ void loop() {
   }
 
   // front button
-
   if (key == 70) {
     fetchBlue();
   }
@@ -883,6 +921,11 @@ void loop() {
   if (key == 12) {
     stopAll = false;
     gripAndIdentifyColor(isGripperOpen);
+  }
+
+  // right button
+  if (key == 67) {
+    rotate90();
   }
 
   // Button to test out code - gripper
