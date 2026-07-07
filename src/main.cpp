@@ -688,12 +688,39 @@ void moveSlowlyToObject() {
   followLineWithDistance(SLOW_LEFT_SPEED, SLOW_RIGHT_SPEED, SLOW_LINE_TURN_SPEED, OBSTACLE_DISTANCE_CM);
 }
 
-void robotReverse(int ms) {
+bool robotReverse(uint16_t timeoutMs = 4000) {
+  bool leftStartPoint = !(digitalRead(LINE_LEFT_PIN) == HIGH &&
+                          digitalRead(LINE_MIDDLE_PIN) == HIGH &&
+                          digitalRead(LINE_RIGHT_PIN) == HIGH);
+  unsigned long startMs = millis();
+
   speed_Upper_L = speed_Lower_L = LEFT_SPEED;
   speed_Upper_R = speed_Lower_R = RIGHT_SPEED;
   robot.Back();
-  delay(ms);
+
+  while (millis() - startMs < timeoutMs) {
+    if (stopRequested()) {
+      robot.Stop();
+      return false;
+    }
+
+    bool onPoint = digitalRead(LINE_LEFT_PIN) == HIGH &&
+                   digitalRead(LINE_MIDDLE_PIN) == HIGH &&
+                   digitalRead(LINE_RIGHT_PIN) == HIGH;
+
+    if (leftStartPoint && onPoint) {
+      robot.Stop();
+      Serial.println("Reverse point reached.");
+      return true;
+    }
+
+    if (!onPoint) leftStartPoint = true;
+    delay(LINE_TICK_MS);
+  }
+
   robot.Stop();
+  Serial.println("Reverse timeout. Point not found.");
+  return false;
 }
 
 bool searchAndCenterLine(uint16_t timeoutMs) {
@@ -828,7 +855,7 @@ delay(LINE_TICK_MS);
 }
 
 bool returnToCheckpoint() {
-  robotReverse(500);
+  if (!robotReverse()) return false;
   if (!rotate180(700)) return false;
   return searchAndCenterLine();
 }
@@ -853,7 +880,7 @@ void setup() {
   robot.right_led(wifiConnected);
   robot.left_led(wifiConnected);
   servo.attach(SERVO_PIN);
-  servo.write(30);
+  servo.write(2);
   // delay(1000);
   Serial.println("Ready. Press IR to start.");
 }
