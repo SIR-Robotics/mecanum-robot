@@ -41,8 +41,13 @@ const uint16_t APPROACH_DISTANCE_CM = 20;
 const uint16_t ULTRASONIC_SAMPLE_MS = 50;
 const uint32_t ULTRASONIC_TIMEOUT_US = 12000;
 const uint8_t  LINE_SEARCH_SPEED    = 40;   // aggressive turning when line is lost
+const uint8_t  GRIPPER_OPEN_ANGLE   = 2;
+const uint8_t  GRIPPER_CLOSE_ANGLE  = 180;
+const uint8_t  GRIPPER_STEP_DELAY_MS = 10;
+const uint16_t REVERSE_BLIND_MS     = 500;
 
 bool isGripperOpen = true; // true = open, false = closed
+uint8_t gripperAngle = GRIPPER_OPEN_ANGLE;
 
 // Color sensor calibration (white=255, black=0)
 int whiteR = 949, whiteG = 967, whiteB = 881;
@@ -437,6 +442,7 @@ bool rotate90(uint8_t turnSpeed, uint16_t timeoutMs) {
     delay(LINE_TICK_MS);
   }
   robot.Stop();
+  delay(1000);
   Serial.println("Rotate 90 timeout. Right sensor did not detect line.");
   return false;
 }
@@ -444,13 +450,16 @@ bool rotate90(uint8_t turnSpeed, uint16_t timeoutMs) {
 // ── Servo Gripper ─────────────────────────────────────────────────────────
 
 void openGripper(bool state) {
-  if (state) {
-    servo.write(180);
-    Serial.println("Gripper: close");
-  } else {
-    servo.write(2);
-    Serial.println("Gripper: open");
+  uint8_t targetAngle = state ? GRIPPER_CLOSE_ANGLE : GRIPPER_OPEN_ANGLE;
+
+  while (gripperAngle != targetAngle) {
+    if (stopRequested()) return;
+    gripperAngle += gripperAngle < targetAngle ? 1 : -1;
+    servo.write(gripperAngle);
+    delay(GRIPPER_STEP_DELAY_MS);
   }
+
+  Serial.println(state ? "Gripper: close" : "Gripper: open");
 }
 
 // - color detection --------------------------------------------
@@ -692,11 +701,17 @@ bool robotReverse(uint16_t timeoutMs = 4000) {
   bool leftStartPoint = !(digitalRead(LINE_LEFT_PIN) == HIGH &&
                           digitalRead(LINE_MIDDLE_PIN) == HIGH &&
                           digitalRead(LINE_RIGHT_PIN) == HIGH);
-  unsigned long startMs = millis();
 
   speed_Upper_L = speed_Lower_L = LEFT_SPEED;
   speed_Upper_R = speed_Lower_R = RIGHT_SPEED;
   robot.Back();
+
+  if (waitOrStop(REVERSE_BLIND_MS)) {
+    robot.Stop();
+    return false;
+  }
+
+  unsigned long startMs = millis();
 
   while (millis() - startMs < timeoutMs) {
     if (stopRequested()) {
@@ -880,7 +895,7 @@ void setup() {
   robot.right_led(wifiConnected);
   robot.left_led(wifiConnected);
   servo.attach(SERVO_PIN);
-  servo.write(2);
+  servo.write(gripperAngle);
   // delay(1000);
   Serial.println("Ready. Press IR to start.");
 }
@@ -1033,6 +1048,10 @@ void loop() {
 
     case 24: // button 5
       path3();
+      break;
+
+    case 94:
+      returnToCheckpoint();
       break;
 
     case 67: // right button
