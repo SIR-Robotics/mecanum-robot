@@ -32,8 +32,12 @@ const uint8_t  CORRECTION_SPEED     = 25;   // used by strafeLeft
 const uint8_t  LEFT_SPEED           = 40;   // advance speed, left side
 const uint8_t  RIGHT_SPEED          = 42;   // advance speed, right side (trim for asymmetry)
 const uint8_t  LINE_TURN_SPEED      = 25;   // spin speed for line-follow corrections
+const uint8_t  SLOW_LEFT_SPEED      = 30;
+const uint8_t  SLOW_RIGHT_SPEED     = 32;
+const uint8_t  SLOW_LINE_TURN_SPEED = 28;
 const uint8_t  LINE_TICK_MS         = 10;   // follow-loop tick delay
 const uint16_t OBSTACLE_DISTANCE_CM = 7;
+const uint16_t APPROACH_DISTANCE_CM = 20;
 const uint16_t ULTRASONIC_SAMPLE_MS = 50;
 const uint32_t ULTRASONIC_TIMEOUT_US = 12000;
 const uint8_t  LINE_SEARCH_SPEED    = 40;   // aggressive turning when line is lost
@@ -102,6 +106,7 @@ bool waitOrStop(uint16_t ms);
 void stopEverything();
 bool searchAndCenterLine(uint16_t timeoutMs = 0);
 bool rotate90(uint8_t turnSpeed = TURNING_SPEED, uint16_t timeoutMs = 2500);
+void moveSlowlyToObject();
 
 void logEsp32Messages() {
   static String line;
@@ -243,7 +248,7 @@ void strafeRight(int ms) {
 // Advance when middle sensor is on the line and sides are clear.
 // Spin toward whichever side sensor picks up the line.
 // Count all-black as a full line crossing; stop when count hits targetCount.
-void followLineWithTarget(int targetCount) {
+void followLineWithTarget(int targetCount, uint8_t leftSpeed, uint8_t rightSpeed, uint8_t turnSpeed) {
   numLines      = 0;
   wasOnFullLine = false;
 
@@ -286,19 +291,23 @@ void followLineWithTarget(int targetCount) {
     // Fallback in every ambiguous state = Advance, so a single-tick sensor
     // flicker never stalls the robot mid-track.
     if (SL == LOW && SR == HIGH) {
-      speed_Upper_L = speed_Lower_L = speed_Upper_R = speed_Lower_R = LINE_TURN_SPEED;
+      speed_Upper_L = speed_Lower_L = speed_Upper_R = speed_Lower_R = turnSpeed;
       robot.Turn_Right();
     } else if (SR == LOW && SL == HIGH) {
-      speed_Upper_L = speed_Lower_L = speed_Upper_R = speed_Lower_R = LINE_TURN_SPEED;
+      speed_Upper_L = speed_Lower_L = speed_Upper_R = speed_Lower_R = turnSpeed;
       robot.Turn_Left();
     } else {
-      speed_Upper_L = speed_Lower_L = LEFT_SPEED;
-      speed_Upper_R = speed_Lower_R = RIGHT_SPEED;
+      speed_Upper_L = speed_Lower_L = leftSpeed;
+      speed_Upper_R = speed_Lower_R = rightSpeed;
       robot.Advance();
     }
 
     delay(LINE_TICK_MS);
   }
+}
+
+void followLineWithTarget(int targetCount) {
+  followLineWithTarget(targetCount, LEFT_SPEED, RIGHT_SPEED, LINE_TURN_SPEED);
 }
 
 bool followLineForMs(uint16_t ms) {
@@ -546,9 +555,7 @@ void updateUltrasonic(UltrasonicReading &sensor) {
 // ── Line follow with ultrasonic obstacle stop ─────────────────────────────
 
 // ── Basic 3-sensor follow with ultrasonic obstacle stop ──────────────────────
-// Same tracking logic as followLineWithTarget; runs until an obstacle is
-// detected within OBSTACLE_DISTANCE_CM or STOP is pressed.
-void followLineWithDistance() {
+bool followLineWithDistance(uint8_t leftSpeed, uint8_t rightSpeed, uint8_t turnSpeed, uint16_t stopDistanceCm) {
   Serial.println("Following line with distance check...");
 
   unsigned long lastIRCheckMs      = 0;
@@ -560,7 +567,7 @@ void followLineWithDistance() {
     unsigned long now = millis();
     if (now - lastIRCheckMs >= 50) {
       lastIRCheckMs = now;
-      if (stopRequested()) return;
+      if (stopRequested()) return false;
     }
 
     if (now - lastDistanceSampleMs >= ULTRASONIC_SAMPLE_MS) {
@@ -578,35 +585,47 @@ void followLineWithDistance() {
         }
       }
 
-      if (distanceCm <= OBSTACLE_DISTANCE_CM) {
+      if (distanceCm <= stopDistanceCm) {
         robot.Stop();
         Serial.print("Obstacle detected at ");
         Serial.print(distanceCm);
         Serial.println(" cm. Stopping.");
-        return;
+        return true;
       }
     }
 
     uint8_t SL = digitalRead(LINE_LEFT_PIN);
-    uint8_t SM = digitalRead(LINE_MIDDLE_PIN);
     uint8_t SR = digitalRead(LINE_RIGHT_PIN);
 
     // Basic 3-sensor tracking. Fallback = Advance so brief sensor blips
     // don't stall the robot; ultrasonic stop is what ends this function.
     if (SL == LOW && SR == HIGH) {
-      speed_Upper_L = speed_Lower_L = speed_Upper_R = speed_Lower_R = LINE_TURN_SPEED;
+      speed_Upper_L = speed_Lower_L = speed_Upper_R = speed_Lower_R = turnSpeed;
       robot.Turn_Right();
     } else if (SR == LOW && SL == HIGH) {
-      speed_Upper_L = speed_Lower_L = speed_Upper_R = speed_Lower_R = LINE_TURN_SPEED;
+      speed_Upper_L = speed_Lower_L = speed_Upper_R = speed_Lower_R = turnSpeed;
       robot.Turn_Left();
     } else {
-      speed_Upper_L = speed_Lower_L = LEFT_SPEED;
-      speed_Upper_R = speed_Lower_R = RIGHT_SPEED;
+      speed_Upper_L = speed_Lower_L = leftSpeed;
+      speed_Upper_R = speed_Lower_R = rightSpeed;
       robot.Advance();
     }
 
     delay(LINE_TICK_MS);
   }
+}
+
+// Same tracking logic as followLineWithTarget; runs until an obstacle is
+// detected within OBSTACLE_DISTANCE_CM or STOP is pressed.
+void followLineWithDistance() {
+  if (followLineWithDistance(LEFT_SPEED, RIGHT_SPEED, LINE_TURN_SPEED, APPROACH_DISTANCE_CM)) {
+    delay(1000);
+    moveSlowlyToObject();
+  }
+}
+
+void moveSlowlyToObject() {
+  followLineWithDistance(SLOW_LEFT_SPEED, SLOW_RIGHT_SPEED, SLOW_LINE_TURN_SPEED, OBSTACLE_DISTANCE_CM);
 }
 
 void robotReverse(int ms) {
@@ -754,6 +773,10 @@ bool returnToCheckpoint() {
   return searchAndCenterLine();
 }
 
+void moveSlowly(int targetCount) {
+  followLineWithTarget(targetCount, SLOW_LEFT_SPEED, SLOW_RIGHT_SPEED, SLOW_LINE_TURN_SPEED);
+}
+
 void setup() {
   pinMode(LINE_LEFT_PIN,   INPUT);
   pinMode(LINE_MIDDLE_PIN, INPUT);
@@ -815,8 +838,11 @@ void loop() {
       if (!rotate180(800)) return;
       if (!searchAndCenterLine()) return;
 
-      followLineWithTarget(7);
+      followLineWithTarget(5);
+      delay(1000);
       if (stopAll) return;
+      moveSlowly(2);
+      delay(1000);
       openGripper(isGripperOpen);
       if (waitOrStop(5000)) return;
       isGripperOpen = !isGripperOpen;
