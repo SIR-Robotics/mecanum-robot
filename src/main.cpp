@@ -228,10 +228,40 @@ void turnRight90() {
   robot.Stop();
 }
 
-void strafeLeft(int ms) {
+void strafeLeft(int targetCount) {
+  int detectedLines = 0;
+  bool wasOnLeftLine = false;
+
   speed_Upper_L = speed_Lower_L = speed_Upper_R = speed_Lower_R = 60;
-  robot.L_Move();
-  delay(ms);
+
+  Serial.print("Strafing left. Target left lines: ");
+  Serial.println(targetCount);
+
+  while (detectedLines < targetCount) {
+    if (stopRequested()) {
+      robot.Stop();
+      return;
+    }
+
+    uint8_t SL = digitalRead(LINE_LEFT_PIN);
+
+    if (SL == HIGH) {
+      if (!wasOnLeftLine) {
+        detectedLines++;
+        wasOnLeftLine = true;
+        Serial.print("Left line detected: ");
+        Serial.print(detectedLines);
+        Serial.print("/");
+        Serial.println(targetCount);
+      }
+    } else {
+      wasOnLeftLine = false;
+    }
+
+    robot.L_Move();
+    delay(LINE_TICK_MS);
+  }
+
   robot.Stop();
 }
 
@@ -798,6 +828,62 @@ void setup() {
   Serial.println("Ready. Press IR to start.");
 }
 
+void path1() {
+  followLineWithDistance();
+  if (stopAll) return;
+  int colorRes = gripAndIdentifyColor(isGripperOpen);
+  if (waitOrStop(5000)) return;
+  delay(300);
+  isGripperOpen = !isGripperOpen;
+
+  if (!rotate180(800)) return;
+  if (!searchAndCenterLine()) return;
+
+  followLineWithTarget(5);
+  delay(1000);
+  if (stopAll) return;
+  moveSlowly(2);
+  delay(1000);
+  openGripper(isGripperOpen);
+  if (waitOrStop(5000)) return;
+  isGripperOpen = !isGripperOpen;
+  sendArmCommand(colorRes);
+  if (!returnToCheckpoint()) return;
+  if (!searchAndCenterLine()) return;
+  followLineWithTarget(2);
+}
+
+void path2() {
+  strafeLeft(2);
+  if (!searchAndCenterLine()) return;
+  followLineWithDistance();
+  if (stopAll) return;
+
+  int colorRes = gripAndIdentifyColor(isGripperOpen);
+  if (colorRes < 0) return;
+  if (waitOrStop(1000)) return;
+  isGripperOpen = !isGripperOpen;
+
+  if (!rotate180(100)) return;
+  if (!searchAndCenterLine()) return;
+  followLineWithTarget(2);
+  delay(500);
+  if (stopAll) return;
+  strafeLeft(3);
+  delay(500);
+  if (!searchAndCenterLine()) return;
+  followLineWithTarget(3);
+  delay(1000);
+  moveSlowly(2);
+  if (stopAll) return;
+  openGripper(isGripperOpen);
+  if (waitOrStop(5000)) return;
+  isGripperOpen = !isGripperOpen;
+  if (!returnToCheckpoint()) return;
+  if (!searchAndCenterLine()) return;
+  followLineWithTarget(2);
+}
+
 void loop() {
   logEsp32Messages();
 
@@ -815,7 +901,7 @@ void loop() {
       robot.left_led(false);
       Serial.println("Following 2 lines...");
       followLineWithTarget(2);
-      strafeLeft(1000);
+      strafeLeft(2);
       followLineWithTarget(4);
       if (!rotate180(1000)) return;
       followLineWithTarget(3);
@@ -826,62 +912,7 @@ void loop() {
 
     case 13: { // challenge 3
       stopAll = false;
-      // path 1 -- start
-      followLineWithDistance();
-      if (stopAll) return;
-      int colorRes = gripAndIdentifyColor(isGripperOpen);
-      if (waitOrStop(5000)) return;
-      delay(300);
-      isGripperOpen = !isGripperOpen;
-
-      // rotate and search
-      if (!rotate180(800)) return;
-      if (!searchAndCenterLine()) return;
-
-      followLineWithTarget(5);
-      delay(1000);
-      if (stopAll) return;
-      moveSlowly(2);
-      delay(1000);
-      openGripper(isGripperOpen);
-      if (waitOrStop(5000)) return;
-      isGripperOpen = !isGripperOpen;
-      sendArmCommand(colorRes);
-      if (!returnToCheckpoint()) return;
-      if (!searchAndCenterLine()) return;
-      followLineWithTarget(2);
-      // path 1 -- end
-
-      // if (!returnToCheckpoint()) return;
-      // if (!searchAndCenterLine()) return;
-      // // if (!followLineForMs(500)) return;
-      // followLineWithTarget(2);
-
-      // // path 2 -- start
-      // strafeLeft(800);
-      // if (!searchAndCenterLine()) return;
-      // followLineWithDistance();
-      // if (stopAll) return;
-      // // delay(400);
-      // colorRes = gripAndIdentifyColor(isGripperOpen);
-      // if (colorRes < 0) return;
-      // if (waitOrStop(5000)) return;
-      // isGripperOpen = !isGripperOpen;
-
-      // if (!rotate180(100)) return;
-      // if (!searchAndCenterLine()) return;
-      // followLineWithTarget(2);
-      // if (stopAll) return;
-      // strafeLeft(800);
-      // if (!searchAndCenterLine()) return;
-      // followLineWithTarget(5);
-      // if (stopAll) return;
-      // openGripper(isGripperOpen);
-      // if (waitOrStop(5000)) return;
-      // isGripperOpen = !isGripperOpen;
-      // // sendArmCommand(colorRes);
-      // if (!returnToCheckpoint()) return;
-      // // path 2 -- end
+      path1();
 
       // // path 3 -- start
       // strafeRight(800);
@@ -919,13 +950,12 @@ void loop() {
       // if (!followLineForMs(500)) return;
       delay(1000);
       followLineWithTarget(2);
-      strafeLeft(800);
+      strafeLeft(2);
       if (!searchAndCenterLine()) return;
       followLineWithDistance();
       break;
 
     case 70: // front button / stop everything
-      fetchBlue();
       robot.Stop();
       stopAll = true;
       robot.right_led(false);
@@ -933,9 +963,10 @@ void loop() {
       Serial.println("Stopped.");
       break;
 
-    case 12:
-      stopAll = false;
-      gripAndIdentifyColor(isGripperOpen);
+    case 12: // number 4
+      // stopAll = false;
+      // gripAndIdentifyColor(isGripperOpen);
+      path2();
       break;
 
     case 67: // right button
