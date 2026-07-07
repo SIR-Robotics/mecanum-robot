@@ -101,6 +101,7 @@ bool stopRequested();
 bool waitOrStop(uint16_t ms);
 void stopEverything();
 bool searchAndCenterLine(uint16_t timeoutMs = 0);
+bool rotate90(uint8_t turnSpeed = TURNING_SPEED, uint16_t timeoutMs = 2500);
 
 void logEsp32Messages() {
   static String line;
@@ -335,19 +336,13 @@ bool followLineForMs(uint16_t ms) {
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-// Simple timed 180° right turn. Tune ROTATE180_MS at the top of the file
-// until the robot lands facing 180° reliably. Returns false if STOP is
-// pressed mid-turn, true otherwise.
 bool rotate180(int ms) {
+  (void)ms;
   Serial.println("Rotating 180 degrees...");
-  speed_Upper_L = speed_Lower_L = speed_Upper_R = speed_Lower_R = TURNING_SPEED;
-  robot.Turn_Right();
-  bool stopped = waitOrStop(ms);
-  robot.Stop();
-  return !stopped;
+  return rotate90() && rotate90();
 }
 
-bool rotate90(uint8_t turnSpeed = TURNING_SPEED, uint16_t timeoutMs = 2500) {
+bool rotate90(uint8_t turnSpeed, uint16_t timeoutMs) {
   Serial.println("Rotating 90 degrees until right sensor detects line...");
 
   unsigned long startMs = millis();
