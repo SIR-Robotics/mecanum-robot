@@ -44,7 +44,7 @@ const uint8_t  LINE_SEARCH_SPEED    = 40;   // aggressive turning when line is l
 const uint8_t  GRIPPER_OPEN_ANGLE   = 2;
 const uint8_t  GRIPPER_CLOSE_ANGLE  = 180;
 const uint8_t  GRIPPER_STEP_DELAY_MS = 10;
-const uint16_t REVERSE_BLIND_MS     = 1700;
+const uint16_t REVERSE_BLIND_MS     = 500;
 
 // Tuning constants — adjust to taste (for searchAndCenterLine)
 const uint16_t SEARCH_SWEEP_INITIAL_MS = 300;   // first sweep half-width
@@ -717,16 +717,16 @@ void moveSlowlyToObject() {
   followLineWithDistance(SLOW_LEFT_SPEED, SLOW_RIGHT_SPEED, SLOW_LINE_TURN_SPEED, OBSTACLE_DISTANCE_CM);
 }
 
-bool robotReverse(uint16_t timeoutMs = 4000) {
+bool robotReverse(uint16_t timeoutMs = 4000, uint16_t reverseBlindMs = REVERSE_BLIND_MS) {
   bool leftStartPoint = !(digitalRead(LINE_LEFT_PIN) == HIGH &&
                           digitalRead(LINE_MIDDLE_PIN) == HIGH &&
                           digitalRead(LINE_RIGHT_PIN) == HIGH);
 
   speed_Upper_L = speed_Lower_L = LEFT_SPEED;
-  speed_Upper_R = speed_Lower_R = RIGHT_SPEED;
+  speed_Upper_R = speed_Lower_R = RIGHT_SPEED + 2; // slight trim for asymmetry
   robot.Back();
 
-  if (waitOrStop(REVERSE_BLIND_MS)) {
+  if (waitOrStop(reverseBlindMs)) {
     robot.Stop();
     return false;
   }
@@ -758,6 +758,21 @@ bool robotReverse(uint16_t timeoutMs = 4000) {
   return false;
 }
 
+bool reverseShort(uint16_t durationMs = 300) {
+  Serial.println("Reversing short distance...");
+
+  speed_Upper_L = speed_Lower_L = LEFT_SPEED;
+  speed_Upper_R = speed_Lower_R = RIGHT_SPEED;
+  robot.Back();
+
+  if (waitOrStop(durationMs)) {
+    robot.Stop();
+    return false;   // stop was requested mid-reverse
+  }
+
+  robot.Stop();
+  return true;
+}
 
 
 bool searchAndCenterLine(uint16_t timeoutMs) {
@@ -880,11 +895,26 @@ bool searchAndCenterLine(uint16_t timeoutMs) {
   }
 }
 
-
+// for path 1
 bool returnToCheckpoint() {
   if (!robotReverse()) return false;
   if (!searchAndCenterLine()) return false;
+  // if (!rotate90()) return false;
+  // reverseShort(100);
   if (!rotate90()) return false;
+  delay(500);
+  reverseShort(300);
+  if (!searchAndCenterLine()) return false;
+  if (!rotate90()) return false;
+  return searchAndCenterLine();
+}
+
+// for path 2 (not finished yet)
+bool returnToCheckpoint2() {
+  if (!robotReverse()) return false;
+  if (!searchAndCenterLine()) return false;
+  if (!rotate90Left()) return false;
+  // reverseShort(100);
   return searchAndCenterLine();
 }
 
@@ -921,11 +951,14 @@ void path1() {
   delay(300);
   isGripperOpen = !isGripperOpen;
 
+
   // if (!rotate180(800)) return;
   if (!rotate90()) return;
   delay(500);
+  reverseShort(300);
+  if (!searchAndCenterLine()) return;
   if (!rotate90()) return;
-  delay(500);
+  // delay(500);
   if (!searchAndCenterLine()) return;
 
   followLineWithTarget(5);
@@ -946,11 +979,16 @@ void path2() {
   // rotate to left 
   // if (!rotate90Left()) return;
   // delay(500);
-  followLineWithTarget(2);
+  followLineWithTarget(3);
   delay(500);
+  reverseShort(300);
+  if (!rotate90Left()) return;
+  // reverseShort(300);
+  delay(500);
+  followLineWithTarget(2);
+  if (!searchAndCenterLine()) return;
   if (!rotate90()) return;
   delay(500);
-
   if (!searchAndCenterLine()) return;
   followLineWithDistance();
   if (stopAll) return;
@@ -962,10 +1000,12 @@ void path2() {
   isGripperOpen = !isGripperOpen;
   delay(500);
   if (!rotate90()) return;
+  // reverseShort(300);
   if (!searchAndCenterLine()) return;
   followLineWithTarget(2);
   delay(500);
   if (!rotate90()) return;
+  // reverseShort(300);
   delay(500);
   followLineWithTarget(5);
   delay(500);
@@ -978,19 +1018,20 @@ void path2() {
   openGripper(isGripperOpen);
   if (waitOrStop(5000)) return;
   isGripperOpen = !isGripperOpen;
-  if (!returnToCheckpoint()) return;
+  if (!returnToCheckpoint2()) return;
   if (!searchAndCenterLine()) return;
 }
 
 void path3() {
   // strafeRight(2); 
   // strafe replacement
-  if (!rotate90()) return;
-  delay(500);
+  // if (!rotate90()) return;
+  // delay(500);
   followLineWithTarget(2);
+  if (!searchAndCenterLine()) return;
   if (!rotate90Left()) return;
-  delay(500);
-
+  // delay(500);
+  // reverseShort(300);
   if (!searchAndCenterLine()) return;
   followLineWithDistance();
   if (stopAll) return;
@@ -1000,7 +1041,13 @@ void path3() {
   if (waitOrStop(5000)) return;
   isGripperOpen = !isGripperOpen;
 
-  if (!rotate180(1000)) return;
+  if (!rotate90()) return;
+  delay(500);
+  reverseShort(300);
+  if (!searchAndCenterLine()) return;
+  if (!rotate90()) return;
+  // delay(500);
+  // if (!searchAndCenterLine()) return;
   if (!searchAndCenterLine()) return;
   followLineWithTarget(2);
   if (stopAll) return;
@@ -1008,10 +1055,14 @@ void path3() {
   // strafeRight(2);
     // strafe replacement
   if (!rotate90()) return;
-  delay(500);
+  // reverseShort(300);
+  // delay(500);
+  if (!searchAndCenterLine()) return;
+
   followLineWithTarget(2);
   if (!rotate90Left()) return;
-  delay(500);
+  // reverseShort(300);
+  // delay(500);
   
   if (!searchAndCenterLine()) return;
   followLineWithTarget(3);
@@ -1035,22 +1086,12 @@ void loop() {
       // followLineWithTarget(7);
       returnToCheckpoint();
       if (!searchAndCenterLine()) return;
-      followLineWithTarget(2);
+      followLineWithTarget(3);
       break;
 
     case 25: // challenge 2
-      stopAll = false;
-      robot.right_led(false);
-      robot.left_led(false);
-      Serial.println("Following 2 lines...");
-      followLineWithTarget(2);
-      strafeLeft(2);
-      followLineWithTarget(4);
-      if (!rotate180(1000)) return;
-      followLineWithTarget(3);
-      robot.right_led(true);
-      robot.left_led(true);
-      Serial.println("Done.");
+      reverseShort(300);
+      if (!searchAndCenterLine()) return;
       break;
 
     case 13: { // challenge 3
