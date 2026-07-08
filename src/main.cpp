@@ -26,7 +26,7 @@ const uint8_t TRIG_PIN = 12;
 // Servo Pin
 const uint8_t SERVO_PIN = 9;
 
-const uint8_t  TURNING_SPEED        = 42;
+const uint8_t  TURNING_SPEED        = 52;
 const uint16_t ROTATE180_MS         = 1000; // tune manually — how long TURNING_SPEED gives you 180°
 const uint8_t  CORRECTION_SPEED     = 25;   // used by strafeLeft
 const uint8_t  LEFT_SPEED           = 40;   // advance speed, left side
@@ -35,7 +35,7 @@ const uint8_t  LINE_TURN_SPEED      = 25;   // spin speed for line-follow correc
 const uint8_t  SLOW_LEFT_SPEED      = 30;
 const uint8_t  SLOW_RIGHT_SPEED     = 32;
 const uint8_t  SLOW_LINE_TURN_SPEED = 28;
-const uint8_t  LINE_TICK_MS         = 10;   // follow-loop tick delay
+const uint8_t  LINE_TICK_MS         = 12;   // follow-loop tick delay
 const uint16_t OBSTACLE_DISTANCE_CM = 6;
 const uint16_t APPROACH_DISTANCE_CM = 20;
 const uint16_t ULTRASONIC_SAMPLE_MS = 50;
@@ -44,7 +44,7 @@ const uint8_t  LINE_SEARCH_SPEED    = 40;   // aggressive turning when line is l
 const uint8_t  GRIPPER_OPEN_ANGLE   = 2;
 const uint8_t  GRIPPER_CLOSE_ANGLE  = 180;
 const uint8_t  GRIPPER_STEP_DELAY_MS = 10;
-const uint16_t REVERSE_BLIND_MS     = 500;
+const uint16_t REVERSE_BLIND_MS     = 1700;
 
 bool isGripperOpen = true; // true = open, false = closed
 uint8_t gripperAngle = GRIPPER_OPEN_ANGLE;
@@ -109,9 +109,9 @@ ColorLabel classifyColor() {
 bool stopRequested();
 bool waitOrStop(uint16_t ms);
 void stopEverything();
-bool searchAndCenterLine(uint16_t timeoutMs = 0);
-bool rotate90(uint8_t turnSpeed = TURNING_SPEED, uint16_t timeoutMs = 2500);
-bool rotate90Left(uint8_t turnSpeed = TURNING_SPEED, uint16_t timeoutMs = 2500);
+bool searchAndCenterLine(uint16_t timeoutMs = 1500);
+bool rotate90(uint8_t turnSpeed = TURNING_SPEED, uint16_t timeoutMs = 3000);
+bool rotate90Left(uint8_t turnSpeed = TURNING_SPEED, uint16_t timeoutMs = 3000);
 void moveSlowlyToObject();
 
 void logEsp32Messages() {
@@ -423,7 +423,7 @@ bool rotate90(uint8_t turnSpeed, uint16_t timeoutMs) {
   unsigned long startMs = millis();
 
   speed_Upper_L = speed_Lower_L = speed_Lower_R = turnSpeed;
-  speed_Upper_R = 44;
+  speed_Upper_R = turnSpeed + 2; // slight trim for asymmetry
 
   while (millis() - startMs < timeoutMs) {
     if (stopRequested()) {
@@ -453,7 +453,7 @@ bool rotate90Left(uint8_t turnSpeed, uint16_t timeoutMs) {
 
   unsigned long startMs = millis();
 
-  speed_Upper_L = 44;
+  speed_Upper_L = turnSpeed + 2; // slight trim for asymmetry
   speed_Lower_L = speed_Upper_R = speed_Lower_R = turnSpeed;
 
   while (millis() - startMs < timeoutMs) {
@@ -521,25 +521,6 @@ bool waitOrStop(uint16_t ms) {
   }
   return false;
 }
-
-// void gripAndIdentifyColor(bool gOpen) {
-//   if (stopRequested()) return;
-
-//   Serial.println("Checking TCS3200 color...");
-//   ColorLabel label = classifyColor();
-
-//   delay(1000);
-//   // servo.write(180);
-//   openGripper(gOpen);
-
-//   if (label == ColorLabel::Blue) {
-//     Serial.println("Blue detected. Gripper closed at 180.");
-//   } else if (label == ColorLabel::Red) {
-//     Serial.println("Red detected. Gripper closed at 180.");
-//   } else {
-//     Serial.println("Yellow detected. Gripper closed at 180.");
-//   }
-// }
 
 int gripAndIdentifyColor(bool gOpen) {
   if (stopRequested()) return -1;
@@ -770,6 +751,13 @@ bool robotReverse(uint16_t timeoutMs = 4000) {
   return false;
 }
 
+// Tuning constants — adjust to taste
+const uint16_t SEARCH_SWEEP_INITIAL_MS = 300;   // first sweep half-width
+const uint16_t SEARCH_SWEEP_GROWTH_MS  = 300;   // how much wider each sweep gets
+const uint16_t SEARCH_SWEEP_MAX_MS     = 1500;  // cap on sweep width
+const uint16_t SEARCH_CREEP_MS         = 200;   // forward nudge between sweeps
+const uint8_t  SEARCH_CREEP_SPEED      = 30;
+
 bool searchAndCenterLine(uint16_t timeoutMs) {
   Serial.println("Searching and centering on line...");
 
@@ -777,9 +765,14 @@ bool searchAndCenterLine(uint16_t timeoutMs) {
   uint8_t centeredTicks = 0;
 
   unsigned long startMs = millis();
-  unsigned long searchStepStartMs = millis();
 
-  uint8_t searchStep = 0;
+  // Search state
+  enum SearchPhase : uint8_t { SWEEP_TOWARD, SWEEP_AWAY, CREEP };
+  SearchPhase phase = SWEEP_TOWARD;
+  unsigned long phaseStartMs = 0;
+  uint16_t sweepMs = SEARCH_SWEEP_INITIAL_MS;
+  bool searching = false;        // are we currently in lost-line mode?
+  int8_t lastSeenSide = +1;      // +1 = line last seen on right, -1 = left
 
   while (true) {
     if (stopRequested()) {
@@ -793,54 +786,40 @@ bool searchAndCenterLine(uint16_t timeoutMs) {
       return false;
     }
 
-    uint8_t SL = digitalRead(LINE_LEFT_PIN);
-    uint8_t SM = digitalRead(LINE_MIDDLE_PIN);
-    uint8_t SR = digitalRead(LINE_RIGHT_PIN);
+    bool L = digitalRead(LINE_LEFT_PIN)   == HIGH;
+    bool M = digitalRead(LINE_MIDDLE_PIN) == HIGH;
+    bool R = digitalRead(LINE_RIGHT_PIN)  == HIGH;
 
-    // Perfect: middle sensor is on black, left/right are white
-    if (SL == LOW && SM == HIGH && SR == LOW) {
+    // --- Centered: middle only ---
+    if (!L && M && !R) {
       robot.Stop();
-      centeredTicks++;
-
-      if (centeredTicks >= CENTER_CONFIRM_TICKS) {
+      if (++centeredTicks >= CENTER_CONFIRM_TICKS) {
         Serial.println("Line found and centered.");
         return true;
       }
-
       delay(LINE_TICK_MS);
       continue;
     }
-
     centeredTicks = 0;
 
-    // Any sensor sees black: correct toward center
-    if (SL == HIGH || SM == HIGH || SR == HIGH) {
+    // --- Some sensor sees the line: correct toward center ---
+    if (L || M || R) {
+      searching = false;  // reset lost-line state machine
+      sweepMs = SEARCH_SWEEP_INITIAL_MS;
+
+      // Remember which side the line is on for future searches
+      if (L && !R)      lastSeenSide = -1;
+      else if (R && !L) lastSeenSide = +1;
+
       speed_Upper_L = speed_Lower_L = speed_Upper_R = speed_Lower_R = LINE_TURN_SPEED;
 
-      if (SL == HIGH && SM == LOW && SR == LOW) {
-        // Line is on left
-        robot.Turn_Left();
-      } 
-      else if (SL == HIGH && SM == HIGH && SR == LOW) {
-        // Line is slightly left
-        robot.Turn_Left();
-      } 
-      else if (SL == LOW && SM == LOW && SR == HIGH) {
-        // Line is on right
-        robot.Turn_Right();
-      } 
-      else if (SL == LOW && SM == HIGH && SR == HIGH) {
-        // Line is slightly right
-        robot.Turn_Right();
-      } 
-      else if (SL == HIGH && SM == HIGH && SR == HIGH) {
-        // On a crossing / thick line, move forward slowly until it becomes normal
-        speed_Upper_L = speed_Lower_L = LEFT_SPEED;
-        speed_Upper_R = speed_Lower_R = RIGHT_SPEED;
-        robot.Advance();
-      } 
-      else {
-        // Middle detects black, but not stable yet
+      if (L && !R) {
+        robot.Turn_Left();          // line is left of center
+      } else if (R && !L) {
+        robot.Turn_Right();         // line is right of center
+      } else {
+        // L && R (crossing / thick line), or middle-only-unstable:
+        // advance slowly until readings normalize
         speed_Upper_L = speed_Lower_L = LEFT_SPEED;
         speed_Upper_R = speed_Lower_R = RIGHT_SPEED;
         robot.Advance();
@@ -850,60 +829,60 @@ bool searchAndCenterLine(uint16_t timeoutMs) {
       continue;
     }
 
- // All sensors are white: line is lost.
-// Aggressive search pattern:
-// 1. fast turn right
-// 2. brief turn left if it overshot
-// 3. fast turn right longer
-// 4. creep forward slightly
-// repeat
-unsigned long stepElapsed = millis() - searchStepStartMs;
+    // --- All white: line lost. Expanding sweep toward last-seen side ---
+    if (!searching) {
+      searching = true;
+      phase = SWEEP_TOWARD;
+      phaseStartMs = millis();
+    }
 
-speed_Upper_L = speed_Lower_L = speed_Upper_R = speed_Lower_R = LINE_SEARCH_SPEED;
+    unsigned long stepElapsed = millis() - phaseStartMs;
+    speed_Upper_L = speed_Lower_L = speed_Upper_R = speed_Lower_R = LINE_SEARCH_SPEED;
 
-if (searchStep == 0) {
-  robot.Turn_Right();
+    switch (phase) {
+      case SWEEP_TOWARD:
+        // Sweep toward the side where the line was last seen
+        (lastSeenSide < 0) ? robot.Turn_Left() : robot.Turn_Right();
+        if (stepElapsed >= sweepMs) {
+          phase = SWEEP_AWAY;
+          phaseStartMs = millis();
+        }
+        break;
 
-  if (stepElapsed >= 500) {
-    searchStep = 1;
-    searchStepStartMs = millis();
-  }
-} 
-else if (searchStep == 1) {
-  robot.Turn_Left();
+      case SWEEP_AWAY:
+        // Sweep back through center to the other side (double width)
+        (lastSeenSide < 0) ? robot.Turn_Right() : robot.Turn_Left();
+        if (stepElapsed >= (uint16_t)(sweepMs * 2)) {
+          phase = CREEP;
+          phaseStartMs = millis();
+        }
+        break;
 
-  if (stepElapsed >= 250) {
-    searchStep = 2;
-    searchStepStartMs = millis();
-  }
-} 
-else if (searchStep == 2) {
-  robot.Turn_Right();
+      case CREEP:
+        // Return roughly to center heading happened implicitly;
+        // nudge forward in case the line is just ahead
+        speed_Upper_L = speed_Lower_L = SEARCH_CREEP_SPEED;
+        speed_Upper_R = speed_Lower_R = SEARCH_CREEP_SPEED;
+        robot.Advance();
+        if (stepElapsed >= SEARCH_CREEP_MS) {
+          // Widen the next sweep, up to the cap
+          uint16_t nextSweep = sweepMs + SEARCH_SWEEP_GROWTH_MS;
+          sweepMs = (nextSweep > SEARCH_SWEEP_MAX_MS) ? SEARCH_SWEEP_MAX_MS : nextSweep;
+          phase = SWEEP_TOWARD;
+          phaseStartMs = millis();
+        }
+        break;
+    }
 
-  if (stepElapsed >= 1000) {
-    searchStep = 3;
-    searchStepStartMs = millis();
-  }
-} 
-else {
-  // Small forward push in case robot is just behind/beside the line
-  speed_Upper_L = speed_Lower_L = 30;
-  speed_Upper_R = speed_Lower_R = 30;
-  robot.Advance();
-
-  if (stepElapsed >= 250) {
-    searchStep = 0;
-    searchStepStartMs = millis();
-  }
-}
-
-delay(LINE_TICK_MS);
+    delay(LINE_TICK_MS);
   }
 }
+
 
 bool returnToCheckpoint() {
   if (!robotReverse()) return false;
-  if (!rotate180(700)) return false;
+  if (!searchAndCenterLine()) return false;
+  if (!rotate90()) return false;
   return searchAndCenterLine();
 }
 
@@ -940,7 +919,11 @@ void path1() {
   delay(300);
   isGripperOpen = !isGripperOpen;
 
-  if (!rotate180(800)) return;
+  // if (!rotate180(800)) return;
+  if (!rotate90()) return;
+  delay(500);
+  if (!rotate90()) return;
+  delay(500);
   if (!searchAndCenterLine()) return;
 
   followLineWithTarget(5);
@@ -954,14 +937,13 @@ void path1() {
   sendArmCommand(colorRes);
   if (!returnToCheckpoint()) return;
   if (!searchAndCenterLine()) return;
-  followLineWithTarget(2);
 }
 
 void path2() {
 
   // rotate to left 
-  if (!rotate90Left()) return;
-  delay(500);
+  // if (!rotate90Left()) return;
+  // delay(500);
   followLineWithTarget(2);
   delay(500);
   if (!rotate90()) return;
@@ -970,23 +952,25 @@ void path2() {
   if (!searchAndCenterLine()) return;
   followLineWithDistance();
   if (stopAll) return;
-
+  delay(500);
   int colorRes = gripAndIdentifyColor(isGripperOpen);
   if (colorRes < 0) return;
   if (waitOrStop(1000)) return;
+  delay(300);
   isGripperOpen = !isGripperOpen;
-
-  if (!rotate180(100)) return;
-  followLineWithTarget(2);
   delay(500);
-  if (!rotate90Left()) return;
-  delay(500);
+  if (!rotate90()) return;
+  if (!searchAndCenterLine()) return;
   followLineWithTarget(2);
   delay(500);
   if (!rotate90()) return;
   delay(500);
-  followLineWithTarget(3);
+  followLineWithTarget(5);
   delay(500);
+  // if (!rotate90()) return;
+  // delay(500);
+  // followLineWithTarget(3);
+  // delay(500);
   moveSlowly(2);
   if (stopAll) return;
   openGripper(isGripperOpen);
@@ -1045,8 +1029,11 @@ void loop() {
 
   switch (key) {
     case 22: // challenge 1
-      stopAll = false;
-      followLineWithTarget(7);
+      // stopAll = false;
+      // followLineWithTarget(7);
+      returnToCheckpoint();
+      if (!searchAndCenterLine()) return;
+      followLineWithTarget(2);
       break;
 
     case 25: // challenge 2
