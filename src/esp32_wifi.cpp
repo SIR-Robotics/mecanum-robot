@@ -96,6 +96,32 @@ bool runColor(const char* color) {
   return ok;
 }
 
+long readCommandKey(const String& message) {
+  String value = message;
+  value.trim();
+  if (value.startsWith("ir_key")) value = value.substring(6);
+
+  bool numeric = value.length() > 0;
+  for (unsigned int i = 0; i < value.length(); i++) {
+    if (!isDigit(value[i]) && !isSpace(value[i])) numeric = false;
+  }
+  if (numeric) return value.toInt();
+
+  const char* keys[] = {"\"ir\"", "\"key\"", "\"case\"", "\"command\"", "\"value\""};
+  for (unsigned int i = 0; i < sizeof(keys) / sizeof(keys[0]); i++) {
+    int keyPos = message.indexOf(keys[i]);
+    if (keyPos < 0) continue;
+
+    int colon = message.indexOf(':', keyPos);
+    if (colon < 0) continue;
+
+    int start = colon + 1;
+    while (start < (int)message.length() && !isDigit(message[start]) && message[start] != '-') start++;
+    if (start < (int)message.length()) return message.substring(start).toInt();
+  }
+  return -1;
+}
+
 bool fetchRed() {
   return runColor("red");
 }
@@ -123,7 +149,8 @@ void handleFavoriotMessage(char* topic, byte* payload, unsigned int length) {
   message.toLowerCase();
   Serial.printf("Favoriot %s: %s\n", topic, message.c_str());
 
-  if (message.indexOf("\"to\":\"mecanum\"") >= 0) {
+  if (message.indexOf("\"to\":\"mecanum\"") >= 0 &&
+      (message.indexOf("_ok") >= 0 || message.indexOf("_fail") >= 0)) {
     long id = readJsonLong(message, "\"id\"");
     if (id >= 0) {
       lastArmResultId = (uint32_t)id;
@@ -133,6 +160,14 @@ void handleFavoriotMessage(char* topic, byte* payload, unsigned int length) {
   }
 
   if (message.indexOf("\"to\":\"arm\"") >= 0) return;
+
+  long key = readCommandKey(message);
+  if (key >= 0) {
+    unoSerial.print("IR_KEY ");
+    unoSerial.println(key);
+    publishFavoriot("command", "sent");
+    return;
+  }
 
   if (message.indexOf("red") >= 0) queuedColor = "red";
   else if (message.indexOf("blue") >= 0) queuedColor = "blue";

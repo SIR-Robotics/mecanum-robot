@@ -63,6 +63,7 @@ int blackR = 5109, blackG = 4806, blackB = 4189;
 int           numLines        = 0;
 bool          wasOnFullLine   = false;
 bool          stopAll         = false;
+int           pendingEspKey   = -1;
 
 volatile unsigned long echoRiseUs = 0;
 volatile unsigned long echoDurationUs = 0;
@@ -121,6 +122,19 @@ bool rotate90(uint8_t turnSpeed = TURNING_SPEED, uint16_t timeoutMs = 3000);
 bool rotate90Left(uint8_t turnSpeed = TURNING_SPEED, uint16_t timeoutMs = 3000);
 void moveSlowlyToObject();
 
+void handleEsp32Line(String line) {
+  line.trim();
+  if (line.startsWith("IR_KEY")) {
+    pendingEspKey = line.substring(6).toInt();
+    Serial.print("ESP32 command key: ");
+    Serial.println(pendingEspKey);
+    return;
+  }
+
+  Serial.print("ESP32: ");
+  Serial.println(line);
+}
+
 void logEsp32Messages() {
   static String line;
 
@@ -128,10 +142,7 @@ void logEsp32Messages() {
     char c = espSerial.read();
     if (c == '\n') {
       line.trim();
-      if (line.length() > 0) {
-        Serial.print("ESP32: ");
-        Serial.println(line);
-      }
+      if (line.length() > 0) handleEsp32Line(line);
       line = "";
     } else if (c != '\r') {
       line += c;
@@ -513,6 +524,12 @@ void stopEverything() {
 
 bool stopRequested() {
   if (stopAll) return true;
+  logEsp32Messages();
+  if (pendingEspKey == STOP_KEY) {
+    pendingEspKey = -1;
+    stopEverything();
+    return true;
+  }
   if (IRreceive.getKey() == STOP_KEY) {
     stopEverything();
     return true;
@@ -1024,11 +1041,7 @@ void path3() {
   if (!returnToCheckpoint()) return;
 }
 
-void loop() {
-  logEsp32Messages();
-
-  int key = IRreceive.getKey();
-
+void runCommandKey(int key) {
   switch (key) {
     case 22: // challenge 1
       // stopAll = false;
@@ -1134,4 +1147,14 @@ void loop() {
   }
 }
 
-//
+void loop() {
+  logEsp32Messages();
+
+  int key = pendingEspKey;
+  if (key >= 0) pendingEspKey = -1;
+  else key = IRreceive.getKey();
+
+  runCommandKey(key);
+}
+
+// 
