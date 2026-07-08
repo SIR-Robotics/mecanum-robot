@@ -150,6 +150,15 @@ void logEsp32Messages() {
   }
 }
 
+void actionLog(const char* message) {
+  Serial.print("action: ");
+  Serial.println(message);
+  espSerial.listen();
+  espSerial.print("ACTION_LOG ");
+  espSerial.println(message);
+  espSerial.flush();
+}
+
 bool connectEsp32Wifi() {
   Serial.println("Waiting for ESP32 WiFi...");
 

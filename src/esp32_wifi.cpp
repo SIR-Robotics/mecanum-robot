@@ -41,11 +41,21 @@ bool favoriotConfigured() {
 void publishFavoriot(const char* key, const char* value) {
   if (!mqtt.connected()) return;
 
-  char payload[180];
-  snprintf(payload, sizeof(payload),
-           "{\"device_developer_id\":\"%s\",\"data\":{\"%s\":\"%s\"}}",
-           DEVICE_DEVELOPER_ID, key, value);
-  mqtt.publish(streamTopic().c_str(), payload);
+  String escaped(value);
+  escaped.replace("\\", "\\\\");
+  escaped.replace("\"", "\\\"");
+  escaped.replace("\r", " ");
+  escaped.replace("\n", " ");
+
+  String payload = "{\"device_developer_id\":\"" + String(DEVICE_DEVELOPER_ID) +
+                   "\",\"data\":{\"" + key + "\":\"" + escaped + "\"}}";
+  mqtt.publish(streamTopic().c_str(), payload.c_str());
+}
+
+void actionLog(const char* message) {
+  String action = "action: ";
+  action += message;
+  publishFavoriot("action", action.c_str());
 }
 
 void report(const char* message) {
@@ -141,6 +151,8 @@ void handleUnoCommand(const String& command) {
     report(fetchBlue() ? "ARM_BLUE_OK" : "ARM_BLUE_FAIL");
   } else if (command == "RUN_YELLOW") {
     report(fetchYellow() ? "ARM_YELLOW_OK" : "ARM_YELLOW_FAIL");
+  } else if (command.startsWith("ACTION_LOG ")) {
+    actionLog(command.substring(11).c_str());
   }
 }
 
