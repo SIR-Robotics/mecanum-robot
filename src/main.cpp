@@ -46,6 +46,13 @@ const uint8_t  GRIPPER_CLOSE_ANGLE  = 180;
 const uint8_t  GRIPPER_STEP_DELAY_MS = 10;
 const uint16_t REVERSE_BLIND_MS     = 1700;
 
+// Tuning constants — adjust to taste (for searchAndCenterLine)
+const uint16_t SEARCH_SWEEP_INITIAL_MS = 300;   // first sweep half-width
+const uint16_t SEARCH_SWEEP_GROWTH_MS  = 300;   // how much wider each sweep gets
+const uint16_t SEARCH_SWEEP_MAX_MS     = 1500;  // cap on sweep width
+const uint16_t SEARCH_CREEP_MS         = 200;   // forward nudge between sweeps
+const uint8_t  SEARCH_CREEP_SPEED      = 30;
+
 bool isGripperOpen = true; // true = open, false = closed
 uint8_t gripperAngle = GRIPPER_OPEN_ANGLE;
 
@@ -751,12 +758,7 @@ bool robotReverse(uint16_t timeoutMs = 4000) {
   return false;
 }
 
-// Tuning constants — adjust to taste
-const uint16_t SEARCH_SWEEP_INITIAL_MS = 300;   // first sweep half-width
-const uint16_t SEARCH_SWEEP_GROWTH_MS  = 300;   // how much wider each sweep gets
-const uint16_t SEARCH_SWEEP_MAX_MS     = 1500;  // cap on sweep width
-const uint16_t SEARCH_CREEP_MS         = 200;   // forward nudge between sweeps
-const uint8_t  SEARCH_CREEP_SPEED      = 30;
+
 
 bool searchAndCenterLine(uint16_t timeoutMs) {
   Serial.println("Searching and centering on line...");
