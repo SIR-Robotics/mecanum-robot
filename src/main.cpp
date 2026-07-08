@@ -111,6 +111,7 @@ bool waitOrStop(uint16_t ms);
 void stopEverything();
 bool searchAndCenterLine(uint16_t timeoutMs = 0);
 bool rotate90(uint8_t turnSpeed = TURNING_SPEED, uint16_t timeoutMs = 2500);
+bool rotate90Left(uint8_t turnSpeed = TURNING_SPEED, uint16_t timeoutMs = 2500);
 void moveSlowlyToObject();
 
 void logEsp32Messages() {
@@ -444,6 +445,37 @@ bool rotate90(uint8_t turnSpeed, uint16_t timeoutMs) {
   robot.Stop();
   delay(1000);
   Serial.println("Rotate 90 timeout. Right sensor did not detect line.");
+  return false;
+}
+
+bool rotate90Left(uint8_t turnSpeed, uint16_t timeoutMs) {
+  Serial.println("Rotating 90 degrees until left sensor detects line...");
+
+  unsigned long startMs = millis();
+
+  speed_Upper_L = 44;
+  speed_Lower_L = speed_Upper_R = speed_Lower_R = turnSpeed;
+
+  while (millis() - startMs < timeoutMs) {
+    if (stopRequested()) {
+      robot.Stop();
+      return false;
+    }
+
+    uint8_t SL = digitalRead(LINE_LEFT_PIN);
+
+    if (SL == HIGH) {
+      robot.Stop();
+      Serial.println("Left sensor detected line.");
+      return searchAndCenterLine();
+    }
+
+    robot.Turn_Left();
+    delay(LINE_TICK_MS);
+  }
+  robot.Stop();
+  delay(1000);
+  Serial.println("Rotate 90 timeout. Left sensor did not detect line.");
   return false;
 }
 
@@ -926,7 +958,15 @@ void path1() {
 }
 
 void path2() {
-  strafeLeft(2);
+
+  // rotate to left 
+  if (!rotate90Left()) return;
+  delay(500);
+  followLineWithTarget(2);
+  delay(500);
+  if (!rotate90()) return;
+  delay(500);
+
   if (!searchAndCenterLine()) return;
   followLineWithDistance();
   if (stopAll) return;
@@ -937,15 +977,16 @@ void path2() {
   isGripperOpen = !isGripperOpen;
 
   if (!rotate180(100)) return;
-  if (!searchAndCenterLine()) return;
   followLineWithTarget(2);
   delay(500);
-  if (stopAll) return;
-  strafeLeft(3);
+  if (!rotate90Left()) return;
   delay(500);
-  if (!searchAndCenterLine()) return;
+  followLineWithTarget(2);
+  delay(500);
+  if (!rotate90()) return;
+  delay(500);
   followLineWithTarget(3);
-  delay(1000);
+  delay(500);
   moveSlowly(2);
   if (stopAll) return;
   openGripper(isGripperOpen);
@@ -953,11 +994,17 @@ void path2() {
   isGripperOpen = !isGripperOpen;
   if (!returnToCheckpoint()) return;
   if (!searchAndCenterLine()) return;
-  followLineWithTarget(2);
 }
 
 void path3() {
-  strafeRight(2);
+  // strafeRight(2); 
+  // strafe replacement
+  if (!rotate90()) return;
+  delay(500);
+  followLineWithTarget(2);
+  if (!rotate90Left()) return;
+  delay(500);
+
   if (!searchAndCenterLine()) return;
   followLineWithDistance();
   if (stopAll) return;
@@ -971,7 +1018,15 @@ void path3() {
   if (!searchAndCenterLine()) return;
   followLineWithTarget(2);
   if (stopAll) return;
-  strafeRight(2);
+
+  // strafeRight(2);
+    // strafe replacement
+  if (!rotate90()) return;
+  delay(500);
+  followLineWithTarget(2);
+  if (!rotate90Left()) return;
+  delay(500);
+  
   if (!searchAndCenterLine()) return;
   followLineWithTarget(3);
   delay(1000);
