@@ -942,7 +942,7 @@ bool searchAndCenterLine(uint16_t timeoutMs, int8_t initialLastSeenSide) {
 
 // for path 1
 bool returnToCheckpoint() {
-  reverseShort(400);
+  reverseShort(300);
   if (!searchAndCenterLine()) return false;
   if (!rotate90()) return false;
   if (!searchAndCenterLine()) return false;
@@ -1014,8 +1014,6 @@ void path1() {
 void path2() {
 
   // rotate to left 
-  // if (!rotate90Left()) return;
-  // delay(500);
   followLineWithTarget(3);
   delay(1000);
   // reverseShort(100);
@@ -1035,8 +1033,8 @@ void path2() {
   delay(500);
   int colorRes = gripAndIdentifyColor(isGripperOpen);
   if (colorRes < 0) return;
+  delay(500);
   if (waitOrStop(1000)) return;
-  delay(300);
   isGripperOpen = !isGripperOpen;
   delay(1000);
   reverseShort(200);
