@@ -327,6 +327,7 @@ void followLineWithTarget(int targetCount, uint8_t leftSpeed, uint8_t rightSpeed
   wasOnFullLine = false;
 
   unsigned long lastIRCheckMs = 0;
+  int8_t lastSeenSide = +1; // +1 = line last seen on right, -1 = left
 
   Serial.print("Basic line follow. Target lines: ");
   Serial.println(targetCount);
@@ -361,19 +362,22 @@ void followLineWithTarget(int targetCount, uint8_t leftSpeed, uint8_t rightSpeed
       wasOnFullLine = false;
     }
 
-    // Basic 3-sensor tracking (from KS0560 lesson_6). HIGH = black, LOW = white.
-    // Fallback in every ambiguous state = Advance, so a single-tick sensor
-    // flicker never stalls the robot mid-track.
-    if (SL == LOW && SR == HIGH) {
-      speed_Upper_L = speed_Lower_L = speed_Upper_R = speed_Lower_R = turnSpeed;
-      robot.Turn_Right();
-    } else if (SR == LOW && SL == HIGH) {
-      speed_Upper_L = speed_Lower_L = speed_Upper_R = speed_Lower_R = turnSpeed;
-      robot.Turn_Left();
-    } else {
+    // Middle sensor owns the lane. Side sensors only correct when middle is off.
+    if (SM == HIGH || (SL == HIGH && SR == HIGH)) {
       speed_Upper_L = speed_Lower_L = leftSpeed;
       speed_Upper_R = speed_Lower_R = rightSpeed;
       robot.Advance();
+    } else if (SL == LOW && SR == HIGH) {
+      lastSeenSide = +1;
+      speed_Upper_L = speed_Lower_L = speed_Upper_R = speed_Lower_R = turnSpeed;
+      robot.Turn_Right();
+    } else if (SR == LOW && SL == HIGH) {
+      lastSeenSide = -1;
+      speed_Upper_L = speed_Lower_L = speed_Upper_R = speed_Lower_R = turnSpeed;
+      robot.Turn_Left();
+    } else {
+      speed_Upper_L = speed_Lower_L = speed_Upper_R = speed_Lower_R = turnSpeed;
+      (lastSeenSide < 0) ? robot.Turn_Left() : robot.Turn_Right();
     }
 
     delay(LINE_TICK_MS);
@@ -387,6 +391,7 @@ void followLineWithTarget(int targetCount) {
 bool followLineForMs(uint16_t ms) {
   unsigned long start = millis();
   unsigned long lastIRCheckMs = 0;
+  int8_t lastSeenSide = +1; // +1 = line last seen on right, -1 = left
 
   while (millis() - start < ms) {
     unsigned long now = millis();
@@ -396,18 +401,24 @@ bool followLineForMs(uint16_t ms) {
     }
 
     uint8_t SL = digitalRead(LINE_LEFT_PIN);
+    uint8_t SM = digitalRead(LINE_MIDDLE_PIN);
     uint8_t SR = digitalRead(LINE_RIGHT_PIN);
 
-    if (SL == LOW && SR == HIGH) {
-      speed_Upper_L = speed_Lower_L = speed_Upper_R = speed_Lower_R = LINE_TURN_SPEED;
-      robot.Turn_Right();
-    } else if (SR == LOW && SL == HIGH) {
-      speed_Upper_L = speed_Lower_L = speed_Upper_R = speed_Lower_R = LINE_TURN_SPEED;
-      robot.Turn_Left();
-    } else {
+    if (SM == HIGH || (SL == HIGH && SR == HIGH)) {
       speed_Upper_L = speed_Lower_L = LEFT_SPEED;
       speed_Upper_R = speed_Lower_R = RIGHT_SPEED;
       robot.Advance();
+    } else if (SL == LOW && SR == HIGH) {
+      lastSeenSide = +1;
+      speed_Upper_L = speed_Lower_L = speed_Upper_R = speed_Lower_R = LINE_TURN_SPEED;
+      robot.Turn_Right();
+    } else if (SR == LOW && SL == HIGH) {
+      lastSeenSide = -1;
+      speed_Upper_L = speed_Lower_L = speed_Upper_R = speed_Lower_R = LINE_TURN_SPEED;
+      robot.Turn_Left();
+    } else {
+      speed_Upper_L = speed_Lower_L = speed_Upper_R = speed_Lower_R = LINE_TURN_SPEED;
+      (lastSeenSide < 0) ? robot.Turn_Left() : robot.Turn_Right();
     }
 
     delay(LINE_TICK_MS);
@@ -652,6 +663,7 @@ bool followLineWithDistance(uint8_t leftSpeed, uint8_t rightSpeed, uint8_t turnS
   unsigned long lastDistanceSampleMs = millis() - ULTRASONIC_SAMPLE_MS;
   unsigned long lastDistanceReportMs = millis() - 250;
   uint16_t distanceCm = 999;
+  int8_t lastSeenSide = +1; // +1 = line last seen on right, -1 = left
 
   while (true) {
     unsigned long now = millis();
@@ -685,20 +697,25 @@ bool followLineWithDistance(uint8_t leftSpeed, uint8_t rightSpeed, uint8_t turnS
     }
 
     uint8_t SL = digitalRead(LINE_LEFT_PIN);
+    uint8_t SM = digitalRead(LINE_MIDDLE_PIN);
     uint8_t SR = digitalRead(LINE_RIGHT_PIN);
 
-    // Basic 3-sensor tracking. Fallback = Advance so brief sensor blips
-    // don't stall the robot; ultrasonic stop is what ends this function.
-    if (SL == LOW && SR == HIGH) {
-      speed_Upper_L = speed_Lower_L = speed_Upper_R = speed_Lower_R = turnSpeed;
-      robot.Turn_Right();
-    } else if (SR == LOW && SL == HIGH) {
-      speed_Upper_L = speed_Lower_L = speed_Upper_R = speed_Lower_R = turnSpeed;
-      robot.Turn_Left();
-    } else {
+    // Middle sensor owns the lane. Side sensors only correct when middle is off.
+    if (SM == HIGH || (SL == HIGH && SR == HIGH)) {
       speed_Upper_L = speed_Lower_L = leftSpeed;
       speed_Upper_R = speed_Lower_R = rightSpeed;
       robot.Advance();
+    } else if (SL == LOW && SR == HIGH) {
+      lastSeenSide = +1;
+      speed_Upper_L = speed_Lower_L = speed_Upper_R = speed_Lower_R = turnSpeed;
+      robot.Turn_Right();
+    } else if (SR == LOW && SL == HIGH) {
+      lastSeenSide = -1;
+      speed_Upper_L = speed_Lower_L = speed_Upper_R = speed_Lower_R = turnSpeed;
+      robot.Turn_Left();
+    } else {
+      speed_Upper_L = speed_Lower_L = speed_Upper_R = speed_Lower_R = turnSpeed;
+      (lastSeenSide < 0) ? robot.Turn_Left() : robot.Turn_Right();
     }
 
     delay(LINE_TICK_MS);
@@ -831,7 +848,7 @@ bool searchAndCenterLine(uint16_t timeoutMs, int8_t initialLastSeenSide) {
 
       speed_Upper_L = speed_Lower_L = speed_Upper_R = speed_Lower_R = LINE_TURN_SPEED;
 
-      if (L && R && !M) {
+      if (L && R) {
         (lastSeenSide < 0) ? robot.Turn_Left() : robot.Turn_Right();
       } else if (L && !R) {
         robot.Turn_Left();          // line is left of center
@@ -983,15 +1000,15 @@ void path2() {
   // if (!rotate90Left()) return;
   // delay(500);
   followLineWithTarget(3);
-  delay(500);
+  delay(1000);
   // reverseShort(100);
   if (!rotate90Left()) return;
   // reverseShort(300);
-  delay(500);
+  delay(1000);
   followLineWithTarget(2);
   if (!searchAndCenterLine()) return;
   if (!rotate90()) return;
-  delay(500);
+  delay(100);
   if (!searchAndCenterLine()) return;
   followLineWithDistance();
   if (stopAll) return;
@@ -1001,12 +1018,12 @@ void path2() {
   if (waitOrStop(1000)) return;
   delay(300);
   isGripperOpen = !isGripperOpen;
-  delay(500);
+  delay(1000);
   if (!rotate90()) return;
   // reverseShort(300);
   if (!searchAndCenterLine()) return;
   followLineWithTarget(2);
-  delay(500);
+  delay(1000);
   if (!rotate90()) return;
   // reverseShort(300);
   delay(500);
