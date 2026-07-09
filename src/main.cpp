@@ -736,7 +736,7 @@ void moveSlowlyToObject() {
   followLineWithDistance(SLOW_LEFT_SPEED, SLOW_RIGHT_SPEED, SLOW_LINE_TURN_SPEED, OBSTACLE_DISTANCE_CM);
 }
 
-bool robotReverse(uint16_t timeoutMs = 4000, uint16_t reverseBlindMs = REVERSE_BLIND_MS) {
+bool robotReverse(uint16_t timeoutMs = 2500, uint16_t reverseBlindMs = REVERSE_BLIND_MS) {
   bool leftStartPoint = !(digitalRead(LINE_LEFT_PIN) == HIGH &&
                           digitalRead(LINE_MIDDLE_PIN) == HIGH &&
                           digitalRead(LINE_RIGHT_PIN) == HIGH);
@@ -787,6 +787,22 @@ bool reverseShort(uint16_t durationMs = 300) {
   if (waitOrStop(durationMs)) {
     robot.Stop();
     return false;   // stop was requested mid-reverse
+  }
+
+  robot.Stop();
+  return true;
+}
+
+bool moveShort(uint16_t durationMs = 300) {
+  Serial.println("Moving short distance...");
+
+  speed_Upper_L = speed_Lower_L = LEFT_SPEED;
+  speed_Upper_R = speed_Lower_R = RIGHT_SPEED;
+  robot.Advance();
+
+  if (waitOrStop(durationMs)) {
+    robot.Stop();
+    return false;
   }
 
   robot.Stop();
@@ -918,13 +934,15 @@ bool searchAndCenterLine(uint16_t timeoutMs, int8_t initialLastSeenSide) {
 
 // for path 1
 bool returnToCheckpoint() {
-  if (!robotReverse()) return false;
+  // if (!robotReverse()) return false;
+  reverseShort(400);
   if (!searchAndCenterLine()) return false;
   // if (!rotate90()) return false;
   // reverseShort(100);
   if (!rotate90()) return false;
+  if (!searchAndCenterLine()) return false;
   delay(500);
-  reverseShort(300);
+  reverseShort(200);
   if (!searchAndCenterLine()) return false;
   if (!rotate90()) return false;
   return searchAndCenterLine();
@@ -977,7 +995,7 @@ void path1() {
   // if (!rotate180(800)) return;
   if (!rotate90()) return;
   delay(500);
-  reverseShort(400);
+  // reverseShort(400);
   if (!searchAndCenterLine()) return;
   if (!rotate90()) return;
   // delay(500);
@@ -1004,14 +1022,18 @@ void path2() {
   followLineWithTarget(3);
   delay(1000);
   // reverseShort(100);
+  moveShort(200);
+  delay(500);
   if (!rotate90Left()) return;
+  // delay(500);
+  // if (!searchAndCenterLine()) return;
   // reverseShort(300);
   delay(1000);
   followLineWithTarget(2);
-  if (!searchAndCenterLine()) return;
+  // if (!searchAndCenterLine()) return;
   if (!rotate90()) return;
   delay(100);
-  if (!searchAndCenterLine()) return;
+  // if (!searchAndCenterLine()) return;
   followLineWithDistance();
   if (stopAll) return;
   delay(500);
@@ -1021,11 +1043,16 @@ void path2() {
   delay(300);
   isGripperOpen = !isGripperOpen;
   delay(1000);
+  reverseShort(200);
+  delay(500);
   if (!rotate90()) return;
+  delay(500);
   // reverseShort(300);
-  if (!searchAndCenterLine()) return;
+  // if (!searchAndCenterLine()) return;
   followLineWithTarget(2);
   delay(1000);
+  moveShort(200);
+  delay(500);
   if (!rotate90()) return;
   // reverseShort(300);
   delay(500);
@@ -1051,15 +1078,19 @@ void path3() {
   // delay(500);
   followLineWithTarget(3);
   delay(500);
-  reverseShort(300);
+  moveShort(200);
+  delay(500);
   if (!rotate90()) return;
   delay(500);
   followLineWithTarget(2);
-  if (!searchAndCenterLine()) return;
+  delay(500);
+  moveShort(200);
+  delay(500);
+  // if (!searchAndCenterLine()) return;
   if (!rotate90Left()) return;
   delay(500);
   // reverseShort(300);
-  if (!searchAndCenterLine()) return;
+  // if (!searchAndCenterLine()) return;
   followLineWithDistance();
   if (stopAll) return;
 
@@ -1068,25 +1099,19 @@ void path3() {
   if (waitOrStop(5000)) return;
   isGripperOpen = !isGripperOpen;
 
-  if (!rotate90()) return;
+  reverseShort(800);
   delay(500);
-  reverseShort(300);
-  if (!searchAndCenterLine()) return;
-  if (!rotate90()) return;
-  // delay(500);
+  if (!rotate90Left()) return;
+  delay(500);
   // if (!searchAndCenterLine()) return;
-  if (!searchAndCenterLine()) return;
+  delay(500);
   followLineWithTarget(2);
   if (stopAll) return;
-
-  // strafeRight(2);
-    // strafe replacement
-  if (!rotate90()) return;
-  // reverseShort(300);
-  // delay(500);
-  if (!searchAndCenterLine()) return;
+  moveShort(200);
 
   followLineWithTarget(2);
+  delay(500);
+  moveShort(200);
   if (!rotate90Left()) return;
   // reverseShort(300);
   // delay(500);
@@ -1163,6 +1188,8 @@ void loop() {
       // stopAll = false;
       // gripAndIdentifyColor(isGripperOpen);
       path2();
+      // delay(2000);
+      // path3();
       break;
 
     case 24: // button 5
