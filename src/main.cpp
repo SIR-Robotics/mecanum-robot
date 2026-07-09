@@ -116,7 +116,7 @@ ColorLabel classifyColor() {
 bool stopRequested();
 bool waitOrStop(uint16_t ms);
 void stopEverything();
-bool searchAndCenterLine(uint16_t timeoutMs = 1500);
+bool searchAndCenterLine(uint16_t timeoutMs = 1500, int8_t initialLastSeenSide = +1);
 bool rotate90(uint8_t turnSpeed = TURNING_SPEED, uint16_t timeoutMs = 3000);
 bool rotate90Left(uint8_t turnSpeed = TURNING_SPEED, uint16_t timeoutMs = 3000);
 void moveSlowlyToObject();
@@ -443,7 +443,7 @@ bool rotate90(uint8_t turnSpeed, uint16_t timeoutMs) {
     if (SR == HIGH) {
       robot.Stop();
       Serial.println("Right sensor detected line.");
-      return searchAndCenterLine();
+      return searchAndCenterLine(1500, +1);
     }
 
     robot.Turn_Right();
@@ -474,7 +474,7 @@ bool rotate90Left(uint8_t turnSpeed, uint16_t timeoutMs) {
     if (SL == HIGH) {
       robot.Stop();
       Serial.println("Left sensor detected line.");
-      return searchAndCenterLine();
+      return searchAndCenterLine(1500, -1);
     }
 
     robot.Turn_Left();
@@ -775,7 +775,7 @@ bool reverseShort(uint16_t durationMs = 300) {
 }
 
 
-bool searchAndCenterLine(uint16_t timeoutMs) {
+bool searchAndCenterLine(uint16_t timeoutMs, int8_t initialLastSeenSide) {
   Serial.println("Searching and centering on line...");
 
   const uint8_t CENTER_CONFIRM_TICKS = 5;
@@ -789,7 +789,7 @@ bool searchAndCenterLine(uint16_t timeoutMs) {
   unsigned long phaseStartMs = 0;
   uint16_t sweepMs = SEARCH_SWEEP_INITIAL_MS;
   bool searching = false;        // are we currently in lost-line mode?
-  int8_t lastSeenSide = +1;      // +1 = line last seen on right, -1 = left
+  int8_t lastSeenSide = initialLastSeenSide; // +1 = line last seen on right, -1 = left
 
   while (true) {
     if (stopRequested()) {
@@ -830,7 +830,9 @@ bool searchAndCenterLine(uint16_t timeoutMs) {
 
       speed_Upper_L = speed_Lower_L = speed_Upper_R = speed_Lower_R = LINE_TURN_SPEED;
 
-      if (L && !R) {
+      if (L && R && !M) {
+        (lastSeenSide < 0) ? robot.Turn_Left() : robot.Turn_Right();
+      } else if (L && !R) {
         robot.Turn_Left();          // line is left of center
       } else if (R && !L) {
         robot.Turn_Right();         // line is right of center
@@ -903,7 +905,7 @@ bool returnToCheckpoint() {
   // reverseShort(100);
   if (!rotate90()) return false;
   delay(500);
-  reverseShort(400);
+  reverseShort(300);
   if (!searchAndCenterLine()) return false;
   if (!rotate90()) return false;
   return searchAndCenterLine();
@@ -981,7 +983,7 @@ void path2() {
   // delay(500);
   followLineWithTarget(3);
   delay(500);
-  reverseShort(300);
+  reverseShort(200);
   if (!rotate90Left()) return;
   // reverseShort(300);
   delay(500);
