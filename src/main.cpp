@@ -1,3 +1,7 @@
+// ==========================================================================
+//  HARDWARE, PINS, CONSTANTS & GLOBAL STATE
+// ==========================================================================
+
 #include <Arduino.h>
 #include <MecanumCar_v2.h>
 #include "ir.h"
@@ -72,9 +76,90 @@ volatile bool echoDurationReady = false;
 
 const uint8_t  STOP_KEY             = 64;
 
+// ==========================================================================
+//  DATA TYPES
+// ==========================================================================
+
 struct RGB { uint8_t r, g, b; };
 
 enum class ColorLabel { Red, Blue, Yellow };
+
+enum UltrasonicState : uint8_t {
+  ULTRASONIC_IDLE,
+  ULTRASONIC_TRIGGER_LOW,
+  ULTRASONIC_TRIGGER_HIGH,
+  ULTRASONIC_WAIT_ECHO
+};
+
+struct UltrasonicReading {
+  UltrasonicState state;
+  unsigned long   lastSampleMs;
+  unsigned long   stateStartUs;
+  uint16_t        distanceCm;
+  bool            sampleReady;
+};
+
+// ==========================================================================
+//  FORWARD DECLARATIONS
+// ==========================================================================
+
+// Forward declarations — every function is declared here so the definitions
+// below can be grouped by topic regardless of call order. Default arguments
+// live only in these declarations.
+int        readRawColor(bool s2, bool s3);
+RGB        readColor();
+ColorLabel classifyColor();
+
+void       stopEverything();
+bool       stopRequested();
+bool       waitOrStop(uint16_t ms);
+
+void       logEsp32Messages();
+bool       connectEsp32Wifi();
+bool       runArmCommand(const char* command, const char* okResponse, const char* failResponse);
+bool       fetchRed();
+bool       fetchBlue();
+bool       fetchYellow();
+void       sendArmCommand(int colorRes);
+
+void       turnRight90();
+bool       moveShort(uint16_t durationMs = 300);
+bool       reverseShort(uint16_t durationMs = 300);
+bool       robotReverse(uint16_t timeoutMs = 2500, uint16_t reverseBlindMs = REVERSE_BLIND_MS);
+void       strafeLeft(int targetCount);
+void       strafeRight(int targetCount);
+
+bool       rotate180(int ms);
+bool       rotate90(uint8_t turnSpeed = TURNING_SPEED, uint16_t timeoutMs = 3000);
+bool       rotate90Left(uint8_t turnSpeed = TURNING_SPEED, uint16_t timeoutMs = 3000);
+
+void       followLineWithTarget(int targetCount, uint8_t leftSpeed, uint8_t rightSpeed, uint8_t turnSpeed);
+void       followLineWithTarget(int targetCount);
+bool       followLineForMs(uint16_t ms);
+void       moveSlowly(int targetCount);
+
+uint16_t   readUltrasonic();
+uint16_t   readUltrasonicMedian();
+void       updateUltrasonic(UltrasonicReading &sensor);
+
+bool       followLineWithDistance(uint8_t leftSpeed, uint8_t rightSpeed, uint8_t turnSpeed, uint16_t stopDistanceCm);
+void       followLineWithDistance();
+void       moveSlowlyToObject();
+
+bool       searchAndCenterLine(uint16_t timeoutMs = 1500, int8_t initialLastSeenSide = 0);
+
+void       openGripper(bool state);
+int        gripAndIdentifyColor(bool gOpen);
+
+bool       returnToCheckpoint();
+
+void       path1();
+void       path2();
+void       path3();
+
+// ==========================================================================
+//  COLOR SENSOR (TCS3200)
+// ==========================================================================
 
 // Read raw pulse width (µs) for given photodiode filter
 int readRawColor(bool s2, bool s3) {
@@ -109,19 +194,39 @@ ColorLabel classifyColor() {
   return ColorLabel::Yellow;
 }
 
-// ── Color Sensor ──────────────────────────────────────────────────────────────
+// ==========================================================================
+//  SYSTEM CONTROL / STOP
+// ==========================================================================
 
+void stopEverything() {
+  robot.Stop();
+  stopAll = true;
+  robot.right_led(false);
+  robot.left_led(false);
+  Serial.println("Stopped.");
+}
 
-// ─────────────────────────────────────────────────────────────────────────────
+bool stopRequested() {
+  if (stopAll) return true;
+  if (IRreceive.getKey() == STOP_KEY) {
+    stopEverything();
+    return true;
+  }
+  return false;
+}
 
-// Forward declarations (defined further down)
-bool stopRequested();
-bool waitOrStop(uint16_t ms);
-void stopEverything();
-bool searchAndCenterLine(uint16_t timeoutMs = 1500, int8_t initialLastSeenSide = 0);
-bool rotate90(uint8_t turnSpeed = TURNING_SPEED, uint16_t timeoutMs = 3000);
-bool rotate90Left(uint8_t turnSpeed = TURNING_SPEED, uint16_t timeoutMs = 3000);
-void moveSlowlyToObject();
+bool waitOrStop(uint16_t ms) {
+  unsigned long start = millis();
+  while (millis() - start < ms) {
+    if (stopRequested()) return true;
+    delay(1);
+  }
+  return false;
+}
+
+// ==========================================================================
+//  ESP32 WIFI + ROBOT-ARM COMMS
+// ==========================================================================
 
 void logEsp32Messages() {
   static String line;
@@ -230,6 +335,10 @@ void sendArmCommand(int colorRes) {
   espSerial.flush();
 }
 
+// ==========================================================================
+//  MOTION PRIMITIVES
+// ==========================================================================
+
 void turnRight90() {
   Serial.println("Turning right 90 degrees...");
   speed_Upper_L = speed_Lower_L = speed_Upper_R = speed_Lower_R = TURNING_SPEED;
@@ -241,6 +350,79 @@ void turnRight90() {
   robot.L_Move();
   delay(400);
   robot.Stop();
+}
+
+bool moveShort(uint16_t durationMs) {
+  Serial.println("Moving short distance...");
+
+  speed_Upper_L = speed_Lower_L = LEFT_SPEED;
+  speed_Upper_R = speed_Lower_R = RIGHT_SPEED;
+  robot.Advance();
+
+  if (waitOrStop(durationMs)) {
+    robot.Stop();
+    return false;
+  }
+
+  robot.Stop();
+  return true;
+}
+
+bool reverseShort(uint16_t durationMs) {
+  Serial.println("Reversing short distance...");
+
+  speed_Upper_L = speed_Lower_L = LEFT_SPEED;
+  speed_Upper_R = speed_Lower_R = RIGHT_SPEED;
+  robot.Back();
+
+  if (waitOrStop(durationMs)) {
+    robot.Stop();
+    return false;   // stop was requested mid-reverse
+  }
+
+  robot.Stop();
+  return true;
+}
+
+bool robotReverse(uint16_t timeoutMs, uint16_t reverseBlindMs) {
+  bool leftStartPoint = !(digitalRead(LINE_LEFT_PIN) == HIGH &&
+                          digitalRead(LINE_MIDDLE_PIN) == HIGH &&
+                          digitalRead(LINE_RIGHT_PIN) == HIGH);
+
+  speed_Upper_L = speed_Lower_L = LEFT_SPEED;
+  speed_Upper_R = speed_Lower_R = RIGHT_SPEED + 2; // slight trim for asymmetry
+  robot.Back();
+
+  if (waitOrStop(reverseBlindMs)) {
+    robot.Stop();
+    return false;
+  }
+
+  unsigned long startMs = millis();
+
+  while (millis() - startMs < timeoutMs) {
+    if (stopRequested()) {
+      robot.Stop();
+      return false;
+    }
+
+    bool onPoint = digitalRead(LINE_LEFT_PIN) == HIGH &&
+                   digitalRead(LINE_MIDDLE_PIN) == HIGH &&
+                   digitalRead(LINE_RIGHT_PIN) == HIGH;
+
+    if (leftStartPoint && onPoint) {
+      robot.Stop();
+      Serial.println("Reverse point reached.");
+      return true;
+    }
+
+    if (!onPoint) leftStartPoint = true;
+    delay(LINE_TICK_MS);
+  }
+
+  robot.Stop();
+  Serial.println("Reverse timeout. Point not found.");
+  return false;
 }
 
 void strafeLeft(int targetCount) {
@@ -317,7 +499,81 @@ void strafeRight(int targetCount) {
   robot.Stop();
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// ==========================================================================
+//  ROTATION (90 / 180)
+// ==========================================================================
+
+bool rotate180(int ms) {
+  (void)ms;
+  Serial.println("Rotating 180 degrees...");
+  return rotate90() && rotate90();
+}
+
+bool rotate90(uint8_t turnSpeed, uint16_t timeoutMs) {
+  Serial.println("Rotating 90 degrees until right sensor detects line...");
+
+  unsigned long startMs = millis();
+
+  speed_Upper_L = speed_Lower_L = speed_Lower_R = turnSpeed;
+  speed_Upper_R = turnSpeed + 2; // slight trim for asymmetry
+
+  while (millis() - startMs < timeoutMs) {
+    if (stopRequested()) {
+      robot.Stop();
+      return false;
+    }
+
+    uint8_t SR = digitalRead(LINE_RIGHT_PIN);
+
+    if (millis() - startMs >= ROTATE_SENSOR_GRACE_MS && SR == HIGH) {
+      robot.Stop();
+      Serial.println("Right sensor detected line.");
+      return searchAndCenterLine(1500, +1);
+    }
+
+    robot.Turn_Right();
+    delay(LINE_TICK_MS);
+  }
+  robot.Stop();
+  delay(1000);
+  Serial.println("Rotate 90 timeout. Right sensor did not detect line.");
+  return false;
+}
+
+bool rotate90Left(uint8_t turnSpeed, uint16_t timeoutMs) {
+  Serial.println("Rotating 90 degrees until left sensor detects line...");
+
+  unsigned long startMs = millis();
+
+  speed_Upper_L = turnSpeed + 2; // slight trim for asymmetry
+  speed_Lower_L = speed_Upper_R = speed_Lower_R = turnSpeed;
+
+  while (millis() - startMs < timeoutMs) {
+    if (stopRequested()) {
+      robot.Stop();
+      return false;
+    }
+
+    uint8_t SL = digitalRead(LINE_LEFT_PIN);
+
+    if (millis() - startMs >= ROTATE_SENSOR_GRACE_MS && SL == HIGH) {
+      robot.Stop();
+      Serial.println("Left sensor detected line.");
+      return searchAndCenterLine(1500, -1);
+    }
+
+    robot.Turn_Left();
+    delay(LINE_TICK_MS);
+  }
+  robot.Stop();
+  delay(1000);
+  Serial.println("Rotate 90 timeout. Left sensor did not detect line.");
+  return false;
+}
+
+// ==========================================================================
+//  LINE FOLLOWING
+// ==========================================================================
 
 // ── Basic 3-sensor line-follow (KS0560 lesson_6 pattern) ─────────────────────
 // Advance when middle sensor is on the line and sides are clear.
@@ -429,144 +685,13 @@ bool followLineForMs(uint16_t ms) {
   return true;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-
-bool rotate180(int ms) {
-  (void)ms;
-  Serial.println("Rotating 180 degrees...");
-  return rotate90() && rotate90();
+void moveSlowly(int targetCount) {
+  followLineWithTarget(targetCount, SLOW_LEFT_SPEED, SLOW_RIGHT_SPEED, SLOW_LINE_TURN_SPEED);
 }
 
-bool rotate90(uint8_t turnSpeed, uint16_t timeoutMs) {
-  Serial.println("Rotating 90 degrees until right sensor detects line...");
-
-  unsigned long startMs = millis();
-
-  speed_Upper_L = speed_Lower_L = speed_Lower_R = turnSpeed;
-  speed_Upper_R = turnSpeed + 2; // slight trim for asymmetry
-
-  while (millis() - startMs < timeoutMs) {
-    if (stopRequested()) {
-      robot.Stop();
-      return false;
-    }
-
-    uint8_t SR = digitalRead(LINE_RIGHT_PIN);
-
-    if (millis() - startMs >= ROTATE_SENSOR_GRACE_MS && SR == HIGH) {
-      robot.Stop();
-      Serial.println("Right sensor detected line.");
-      return searchAndCenterLine(1500, +1);
-    }
-
-    robot.Turn_Right();
-    delay(LINE_TICK_MS);
-  }
-  robot.Stop();
-  delay(1000);
-  Serial.println("Rotate 90 timeout. Right sensor did not detect line.");
-  return false;
-}
-
-bool rotate90Left(uint8_t turnSpeed, uint16_t timeoutMs) {
-  Serial.println("Rotating 90 degrees until left sensor detects line...");
-
-  unsigned long startMs = millis();
-
-  speed_Upper_L = turnSpeed + 2; // slight trim for asymmetry
-  speed_Lower_L = speed_Upper_R = speed_Lower_R = turnSpeed;
-
-  while (millis() - startMs < timeoutMs) {
-    if (stopRequested()) {
-      robot.Stop();
-      return false;
-    }
-
-    uint8_t SL = digitalRead(LINE_LEFT_PIN);
-
-    if (millis() - startMs >= ROTATE_SENSOR_GRACE_MS && SL == HIGH) {
-      robot.Stop();
-      Serial.println("Left sensor detected line.");
-      return searchAndCenterLine(1500, -1);
-    }
-
-    robot.Turn_Left();
-    delay(LINE_TICK_MS);
-  }
-  robot.Stop();
-  delay(1000);
-  Serial.println("Rotate 90 timeout. Left sensor did not detect line.");
-  return false;
-}
-
-// ── Servo Gripper ─────────────────────────────────────────────────────────
-
-void openGripper(bool state) {
-  uint8_t targetAngle = state ? GRIPPER_CLOSE_ANGLE : GRIPPER_OPEN_ANGLE;
-
-  while (gripperAngle != targetAngle) {
-    if (stopRequested()) return;
-    gripperAngle += gripperAngle < targetAngle ? 1 : -1;
-    servo.write(gripperAngle);
-    delay(GRIPPER_STEP_DELAY_MS);
-  }
-
-  Serial.println(state ? "Gripper: close" : "Gripper: open");
-}
-
-// - color detection --------------------------------------------
-
-void stopEverything() {
-  robot.Stop();
-  stopAll = true;
-  robot.right_led(false);
-  robot.left_led(false);
-  Serial.println("Stopped.");
-}
-
-bool stopRequested() {
-  if (stopAll) return true;
-  if (IRreceive.getKey() == STOP_KEY) {
-    stopEverything();
-    return true;
-  }
-  return false;
-}
-
-bool waitOrStop(uint16_t ms) {
-  unsigned long start = millis();
-  while (millis() - start < ms) {
-    if (stopRequested()) return true;
-    delay(1);
-  }
-  return false;
-}
-
-int gripAndIdentifyColor(bool gOpen) {
-  if (stopRequested()) return -1;
-
-  Serial.println("Checking TCS3200 color...");
-  ColorLabel label = classifyColor();
-
-  // servo.write(180);
-  openGripper(gOpen);
-  delay(1000);
-
-  if (label == ColorLabel::Blue) {
-    Serial.println("Blue detected. Gripper closed at 180.");
-    return 0;
-  } else if (label == ColorLabel::Red) {
-    Serial.println("Red detected. Gripper closed at 180.");
-    return 1;
-  } else {
-    Serial.println("Yellow detected. Gripper closed at 180.");
-    return 2;
-  }
-}
-
-
-
-// ── Ultrasonic Sensor ─────────────────────────────────────────────────────
+// ==========================================================================
+//  ULTRASONIC SENSOR
+// ==========================================================================
 
 uint16_t readUltrasonic() {
   digitalWrite(TRIG_PIN, LOW);
@@ -592,21 +717,6 @@ uint16_t readUltrasonicMedian() {
   if (a > b) { uint16_t t = a; a = b; b = t; }
   return b;
 }
-
-enum UltrasonicState : uint8_t {
-  ULTRASONIC_IDLE,
-  ULTRASONIC_TRIGGER_LOW,
-  ULTRASONIC_TRIGGER_HIGH,
-  ULTRASONIC_WAIT_ECHO
-};
-
-struct UltrasonicReading {
-  UltrasonicState state;
-  unsigned long   lastSampleMs;
-  unsigned long   stateStartUs;
-  uint16_t        distanceCm;
-  bool            sampleReady;
-};
 
 // Advances one ultrasonic measurement without blocking line tracking.
 void updateUltrasonic(UltrasonicReading &sensor) {
@@ -667,9 +777,10 @@ void updateUltrasonic(UltrasonicReading &sensor) {
   }
 }
 
-// ── Line follow with ultrasonic obstacle stop ─────────────────────────────
+// ==========================================================================
+//  LINE FOLLOWING WITH OBSTACLE STOP
+// ==========================================================================
 
-// ── Basic 3-sensor follow with ultrasonic obstacle stop ──────────────────────
 bool followLineWithDistance(uint8_t leftSpeed, uint8_t rightSpeed, uint8_t turnSpeed, uint16_t stopDistanceCm) {
   Serial.println("Following line with distance check...");
 
@@ -756,79 +867,9 @@ void moveSlowlyToObject() {
   followLineWithDistance(SLOW_LEFT_SPEED, SLOW_RIGHT_SPEED, SLOW_LINE_TURN_SPEED, OBSTACLE_DISTANCE_CM);
 }
 
-bool robotReverse(uint16_t timeoutMs = 2500, uint16_t reverseBlindMs = REVERSE_BLIND_MS) {
-  bool leftStartPoint = !(digitalRead(LINE_LEFT_PIN) == HIGH &&
-                          digitalRead(LINE_MIDDLE_PIN) == HIGH &&
-                          digitalRead(LINE_RIGHT_PIN) == HIGH);
-
-  speed_Upper_L = speed_Lower_L = LEFT_SPEED;
-  speed_Upper_R = speed_Lower_R = RIGHT_SPEED + 2; // slight trim for asymmetry
-  robot.Back();
-
-  if (waitOrStop(reverseBlindMs)) {
-    robot.Stop();
-    return false;
-  }
-
-  unsigned long startMs = millis();
-
-  while (millis() - startMs < timeoutMs) {
-    if (stopRequested()) {
-      robot.Stop();
-      return false;
-    }
-
-    bool onPoint = digitalRead(LINE_LEFT_PIN) == HIGH &&
-                   digitalRead(LINE_MIDDLE_PIN) == HIGH &&
-                   digitalRead(LINE_RIGHT_PIN) == HIGH;
-
-    if (leftStartPoint && onPoint) {
-      robot.Stop();
-      Serial.println("Reverse point reached.");
-      return true;
-    }
-
-    if (!onPoint) leftStartPoint = true;
-    delay(LINE_TICK_MS);
-  }
-
-  robot.Stop();
-  Serial.println("Reverse timeout. Point not found.");
-  return false;
-}
-
-bool reverseShort(uint16_t durationMs = 300) {
-  Serial.println("Reversing short distance...");
-
-  speed_Upper_L = speed_Lower_L = LEFT_SPEED;
-  speed_Upper_R = speed_Lower_R = RIGHT_SPEED;
-  robot.Back();
-
-  if (waitOrStop(durationMs)) {
-    robot.Stop();
-    return false;   // stop was requested mid-reverse
-  }
-
-  robot.Stop();
-  return true;
-}
-
-bool moveShort(uint16_t durationMs = 300) {
-  Serial.println("Moving short distance...");
-
-  speed_Upper_L = speed_Lower_L = LEFT_SPEED;
-  speed_Upper_R = speed_Lower_R = RIGHT_SPEED;
-  robot.Advance();
-
-  if (waitOrStop(durationMs)) {
-    robot.Stop();
-    return false;
-  }
-
-  robot.Stop();
-  return true;
-}
-
+// ==========================================================================
+//  LINE SEARCH & CENTERING
+// ==========================================================================
 
 bool searchAndCenterLine(uint16_t timeoutMs, int8_t initialLastSeenSide) {
   Serial.println("Searching and centering on line...");
@@ -940,6 +981,49 @@ bool searchAndCenterLine(uint16_t timeoutMs, int8_t initialLastSeenSide) {
   }
 }
 
+// ==========================================================================
+//  GRIPPER
+// ==========================================================================
+
+void openGripper(bool state) {
+  uint8_t targetAngle = state ? GRIPPER_CLOSE_ANGLE : GRIPPER_OPEN_ANGLE;
+
+  while (gripperAngle != targetAngle) {
+    if (stopRequested()) return;
+    gripperAngle += gripperAngle < targetAngle ? 1 : -1;
+    servo.write(gripperAngle);
+    delay(GRIPPER_STEP_DELAY_MS);
+  }
+
+  Serial.println(state ? "Gripper: close" : "Gripper: open");
+}
+
+int gripAndIdentifyColor(bool gOpen) {
+  if (stopRequested()) return -1;
+
+  Serial.println("Checking TCS3200 color...");
+  ColorLabel label = classifyColor();
+
+  // servo.write(180);
+  openGripper(gOpen);
+  delay(1000);
+
+  if (label == ColorLabel::Blue) {
+    Serial.println("Blue detected. Gripper closed at 180.");
+    return 0;
+  } else if (label == ColorLabel::Red) {
+    Serial.println("Red detected. Gripper closed at 180.");
+    return 1;
+  } else {
+    Serial.println("Yellow detected. Gripper closed at 180.");
+    return 2;
+  }
+}
+
+// ==========================================================================
+//  NAVIGATION HELPERS
+// ==========================================================================
+
 // for path 1
 bool returnToCheckpoint() {
   reverseShort(300);
@@ -953,10 +1037,184 @@ bool returnToCheckpoint() {
   return searchAndCenterLine();
 }
 
+// ==========================================================================
+//  CHALLENGE PATHS
+// ==========================================================================
 
-void moveSlowly(int targetCount) {
-  followLineWithTarget(targetCount, SLOW_LEFT_SPEED, SLOW_RIGHT_SPEED, SLOW_LINE_TURN_SPEED);
+// path1 — pick up the object straight ahead, ferry it to the drop lane,
+// release it, signal the arm which colour it was, then return to the checkpoint.
+void path1() {
+  // ── Phase 1: approach the object, grip & identify its colour ──
+  followLineWithDistance();
+  if (stopAll) return;
+  int colorRes = gripAndIdentifyColor(isGripperOpen);
+  if (waitOrStop(5000)) return;
+  delay(300);
+  isGripperOpen = !isGripperOpen;
+
+
+  // ── Phase 2: turn around (two right turns) onto the drop lane ──
+  // if (!rotate180(800)) return;
+  if (!rotate90()) return;
+  delay(500);
+  // reverseShort(400);
+  if (!searchAndCenterLine()) return;
+  if (!rotate90()) return;
+  // delay(500);
+  if (!searchAndCenterLine()) return;
+
+  // ── Phase 3: drive to the drop zone and release the object ──
+  followLineWithTarget(5);
+  delay(1000);
+  if (stopAll) return;
+  moveSlowly(2);
+  delay(1000);
+  openGripper(isGripperOpen);
+  if (waitOrStop(5000)) return;
+  isGripperOpen = !isGripperOpen;
+
+  // ── Phase 4: signal the arm, then return to the checkpoint ──
+  sendArmCommand(colorRes);
+  if (!returnToCheckpoint()) return;
+  if (!searchAndCenterLine()) return;
 }
+
+// path2 — LEFT-side run. Fetches the object from the left branch and brings
+// it to the drop zone (mirror of path3; distances are hand-tuned per side).
+void path2() {
+
+  // ── Phase 1: turn onto the object lane (left, then in) ──
+  // rotate to left 
+  followLineWithTarget(3);
+  delay(1000);
+  // reverseShort(100);
+  moveShort(200);
+  delay(500);
+  if (!rotate90Left()) return;
+  delay(1000);
+  followLineWithTarget(2);
+  delay(500);
+  moveShort(100);
+  delay(500);
+  if (!rotate90()) return;
+  delay(500);
+  // if (!searchAndCenterLine()) return;
+
+  // ── Phase 2: approach the object, grip & identify its colour ──
+  followLineWithDistance();
+  if (stopAll) return;
+  delay(500);
+  int colorRes = gripAndIdentifyColor(isGripperOpen);
+  if (colorRes < 0) return;
+  delay(500);
+  if (waitOrStop(1000)) return;
+  isGripperOpen = !isGripperOpen;
+  delay(1000);
+
+  // ── Phase 3: back off and navigate to the drop lane ──
+  reverseShort(150);
+  delay(500);
+  if (!rotate90()) return;
+  delay(500);
+  // if (!searchAndCenterLine()) return;
+  delay(500);
+  followLineWithTarget(2);
+  if (stopAll) return;
+  delay(500);
+  moveShort(200);
+  delay(500);
+  if (!rotate90()) return;
+  
+  // reverseShort(200);
+  // delay(500);
+  // if (!rotate90()) return;
+  // delay(500);
+  // // reverseShort(300);
+  // // if (!searchAndCenterLine()) return;
+  // followLineWithTarget(2);
+  // delay(1000);
+  // moveShort(200);
+  // delay(500);
+  // if (!rotate90()) return;
+  // // reverseShort(300);
+  // delay(500);
+
+  // ── Phase 4: final approach and release the object ──
+  followLineWithTarget(5);
+  delay(1000);
+  if (stopAll) return;
+  moveSlowly(2);
+  delay(1000);
+  openGripper(isGripperOpen);
+  if (waitOrStop(5000)) return;
+  isGripperOpen = !isGripperOpen;
+
+  // ── Phase 5: return to the checkpoint ──
+  if (!returnToCheckpoint()) return;
+  if (!searchAndCenterLine()) return;
+}
+
+// path3 — RIGHT-side run: mirror of path2. Fetches the object from the right
+// branch and brings it to the drop zone (hand-tuned distances differ from path2).
+void path3() {
+  // ── Phase 1: turn onto the object lane (right, then in) ──
+  // strafeRight(2); 
+  // strafe replacement
+  // if (!rotate90()) return;
+  // delay(500);
+  followLineWithTarget(3);
+  delay(500);
+  moveShort(150);
+  delay(500);
+  if (!rotate90()) return;
+  delay(500);
+  followLineWithTarget(2);
+  delay(500);
+  moveShort(300);
+  delay(500);
+  if (!rotate90Left()) return;
+  delay(500);
+
+  // ── Phase 2: approach the object, grip & identify its colour ──
+  followLineWithDistance();
+  if (stopAll) return;
+
+  int colorRes = gripAndIdentifyColor(isGripperOpen);
+  if (colorRes < 0) return;
+  if (waitOrStop(5000)) return;
+  isGripperOpen = !isGripperOpen;
+
+  // ── Phase 3: back off and navigate to the drop lane ──
+  reverseShort(150);
+  delay(500);
+  if (!rotate90Left()) return;
+  delay(500);
+  // if (!searchAndCenterLine()) return;
+  delay(500);
+  followLineWithTarget(2);
+  if (stopAll) return;
+  delay(500);
+  moveShort(200);
+  delay(500);
+  if (!rotate90Left()) return;
+
+  // ── Phase 4: final approach and release the object ──
+  if (!searchAndCenterLine()) return;
+  followLineWithTarget(5);
+  delay(1000);
+  if (stopAll) return;
+  moveSlowly(2);
+  delay(1000);
+  openGripper(isGripperOpen);
+  if (waitOrStop(5000)) return;
+  isGripperOpen = !isGripperOpen;
+  // ── Phase 5: return to the checkpoint ──
+  if (!returnToCheckpoint()) return;
+}
+
+// ==========================================================================
+//  ARDUINO ENTRY POINTS
+// ==========================================================================
 
 void setup() {
   pinMode(LINE_LEFT_PIN,   INPUT);
@@ -978,141 +1236,6 @@ void setup() {
   servo.write(gripperAngle);
   // delay(1000);
   Serial.println("Ready. Press IR to start.");
-}
-
-void path1() {
-  followLineWithDistance();
-  if (stopAll) return;
-  int colorRes = gripAndIdentifyColor(isGripperOpen);
-  if (waitOrStop(5000)) return;
-  delay(300);
-  isGripperOpen = !isGripperOpen;
-
-
-  // if (!rotate180(800)) return;
-  if (!rotate90()) return;
-  delay(500);
-  // reverseShort(400);
-  if (!searchAndCenterLine()) return;
-  if (!rotate90()) return;
-  // delay(500);
-  if (!searchAndCenterLine()) return;
-
-  followLineWithTarget(5);
-  delay(1000);
-  if (stopAll) return;
-  moveSlowly(2);
-  delay(1000);
-  openGripper(isGripperOpen);
-  if (waitOrStop(5000)) return;
-  isGripperOpen = !isGripperOpen;
-  sendArmCommand(colorRes);
-  if (!returnToCheckpoint()) return;
-  if (!searchAndCenterLine()) return;
-}
-
-void path2() {
-
-  // rotate to left 
-  followLineWithTarget(3);
-  delay(1000);
-  // reverseShort(100);
-  moveShort(200);
-  delay(500);
-  if (!rotate90Left()) return;
-  delay(1000);
-  followLineWithTarget(2);
-  delay(500);
-  moveShort(200);
-  delay(500);
-  if (!rotate90()) return;
-  delay(500);
-  // if (!searchAndCenterLine()) return;
-  followLineWithDistance();
-  if (stopAll) return;
-  delay(500);
-  int colorRes = gripAndIdentifyColor(isGripperOpen);
-  if (colorRes < 0) return;
-  delay(500);
-  if (waitOrStop(1000)) return;
-  isGripperOpen = !isGripperOpen;
-  delay(1000);
-  reverseShort(200);
-  delay(500);
-  if (!rotate90()) return;
-  delay(500);
-  // reverseShort(300);
-  // if (!searchAndCenterLine()) return;
-  followLineWithTarget(2);
-  delay(1000);
-  moveShort(200);
-  delay(500);
-  if (!rotate90()) return;
-  // reverseShort(300);
-  delay(500);
-  followLineWithTarget(5);
-  delay(500);
-  // if (!rotate90()) return;
-  // delay(500);
-  // followLineWithTarget(3);
-  // delay(500);
-  moveSlowly(2);
-  if (stopAll) return;
-  openGripper(isGripperOpen);
-  if (waitOrStop(5000)) return;
-  isGripperOpen = !isGripperOpen;
-  if (!returnToCheckpoint()) return;
-  if (!searchAndCenterLine()) return;
-}
-
-void path3() {
-  // strafeRight(2); 
-  // strafe replacement
-  // if (!rotate90()) return;
-  // delay(500);
-  followLineWithTarget(3);
-  delay(500);
-  moveShort(200);
-  delay(500);
-  if (!rotate90()) return;
-  delay(500);
-  followLineWithTarget(2);
-  delay(500);
-  moveShort(300);
-  delay(500);
-  if (!rotate90Left()) return;
-  delay(500);
-
-  followLineWithDistance();
-  if (stopAll) return;
-
-  int colorRes = gripAndIdentifyColor(isGripperOpen);
-  if (colorRes < 0) return;
-  if (waitOrStop(5000)) return;
-  isGripperOpen = !isGripperOpen;
-
-  reverseShort(300);
-  delay(500);
-  if (!rotate90Left()) return;
-  delay(500);
-  // if (!searchAndCenterLine()) return;
-  delay(500);
-  followLineWithTarget(2);
-  if (stopAll) return;
-  delay(500);
-  moveShort(200);
-  delay(500);
-  if (!rotate90Left()) return;
-
-  if (!searchAndCenterLine()) return;
-  followLineWithTarget(4);
-  delay(1000);
-  moveSlowly(2);
-  if (stopAll) return;
-  openGripper(isGripperOpen);
-  if (waitOrStop(5000)) return;
-  isGripperOpen = !isGripperOpen;
-  if (!returnToCheckpoint()) return;
 }
 
 void loop() {
@@ -1221,5 +1344,3 @@ void loop() {
       break;
   }
 }
-
-//
