@@ -36,10 +36,12 @@ const uint8_t  SLOW_LEFT_SPEED      = 30;
 const uint8_t  SLOW_RIGHT_SPEED     = 32;
 const uint8_t  SLOW_LINE_TURN_SPEED = 28;
 const uint8_t  LINE_TICK_MS         = 12;   // follow-loop tick delay
-const uint16_t OBSTACLE_DISTANCE_CM = 6;
+const uint16_t OBSTACLE_DISTANCE_CM = 7;
 const uint16_t APPROACH_DISTANCE_CM = 20;
 const uint16_t ULTRASONIC_SAMPLE_MS = 50;
 const uint32_t ULTRASONIC_TIMEOUT_US = 12000;
+const uint8_t  ULTRASONIC_CONFIRM_READS = 3;
+const uint8_t  ULTRASONIC_STOP_HYSTERESIS_CM = 2;
 const uint8_t  LINE_SEARCH_SPEED    = 40;   // aggressive turning when line is lost
 const uint8_t  GRIPPER_OPEN_ANGLE   = 2;
 const uint8_t  GRIPPER_CLOSE_ANGLE  = 180;
@@ -578,6 +580,19 @@ uint16_t readUltrasonic() {
   return duration / 58.2;
 }
 
+uint16_t readUltrasonicMedian() {
+  uint16_t a = readUltrasonic();
+  delay(3);
+  uint16_t b = readUltrasonic();
+  delay(3);
+  uint16_t c = readUltrasonic();
+
+  if (a > b) { uint16_t t = a; a = b; b = t; }
+  if (b > c) { uint16_t t = b; b = c; c = t; }
+  if (a > b) { uint16_t t = a; a = b; b = t; }
+  return b;
+}
+
 enum UltrasonicState : uint8_t {
   ULTRASONIC_IDLE,
   ULTRASONIC_TRIGGER_LOW,
@@ -662,6 +677,7 @@ bool followLineWithDistance(uint8_t leftSpeed, uint8_t rightSpeed, uint8_t turnS
   unsigned long lastDistanceSampleMs = millis() - ULTRASONIC_SAMPLE_MS;
   unsigned long lastDistanceReportMs = millis() - 250;
   uint16_t distanceCm = 999;
+  uint8_t closeReadCount = 0;
   int8_t lastSeenSide = +1; // +1 = line last seen on right, -1 = left
 
   while (true) {
@@ -673,7 +689,7 @@ bool followLineWithDistance(uint8_t leftSpeed, uint8_t rightSpeed, uint8_t turnS
 
     if (now - lastDistanceSampleMs >= ULTRASONIC_SAMPLE_MS) {
       lastDistanceSampleMs = now;
-      distanceCm = readUltrasonic();
+      distanceCm = readUltrasonicMedian();
 
       if (now - lastDistanceReportMs >= 250) {
         lastDistanceReportMs = now;
@@ -687,6 +703,12 @@ bool followLineWithDistance(uint8_t leftSpeed, uint8_t rightSpeed, uint8_t turnS
       }
 
       if (distanceCm <= stopDistanceCm) {
+        closeReadCount++;
+      } else if (distanceCm > stopDistanceCm + ULTRASONIC_STOP_HYSTERESIS_CM) {
+        closeReadCount = 0;
+      }
+
+      if (closeReadCount >= ULTRASONIC_CONFIRM_READS) {
         robot.Stop();
         Serial.print("Obstacle detected at ");
         Serial.print(distanceCm);
