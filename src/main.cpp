@@ -45,6 +45,7 @@ const uint8_t  GRIPPER_OPEN_ANGLE   = 2;
 const uint8_t  GRIPPER_CLOSE_ANGLE  = 180;
 const uint8_t  GRIPPER_STEP_DELAY_MS = 10;
 const uint16_t REVERSE_BLIND_MS     = 500;
+const uint16_t ROTATE_SENSOR_GRACE_MS = 100;
 
 // Tuning constants — adjust to taste (for searchAndCenterLine)
 const uint16_t SEARCH_SWEEP_INITIAL_MS = 300;   // first sweep half-width
@@ -440,7 +441,7 @@ bool rotate90(uint8_t turnSpeed, uint16_t timeoutMs) {
 
     uint8_t SR = digitalRead(LINE_RIGHT_PIN);
 
-    if (SR == HIGH) {
+    if (millis() - startMs >= ROTATE_SENSOR_GRACE_MS && SR == HIGH) {
       robot.Stop();
       Serial.println("Right sensor detected line.");
       return searchAndCenterLine(1500, +1);
@@ -471,7 +472,7 @@ bool rotate90Left(uint8_t turnSpeed, uint16_t timeoutMs) {
 
     uint8_t SL = digitalRead(LINE_LEFT_PIN);
 
-    if (SL == HIGH) {
+    if (millis() - startMs >= ROTATE_SENSOR_GRACE_MS && SL == HIGH) {
       robot.Stop();
       Serial.println("Left sensor detected line.");
       return searchAndCenterLine(1500, -1);
@@ -983,7 +984,7 @@ void path2() {
   // delay(500);
   followLineWithTarget(3);
   delay(500);
-  reverseShort(200);
+  // reverseShort(100);
   if (!rotate90Left()) return;
   // reverseShort(300);
   delay(500);
