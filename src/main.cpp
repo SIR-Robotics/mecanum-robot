@@ -26,7 +26,7 @@ const uint8_t TRIG_PIN = 12;
 // Servo Pin
 const uint8_t SERVO_PIN = 9;
 
-const uint8_t  TURNING_SPEED        = 52;
+const uint8_t  TURNING_SPEED        = 54;
 const uint16_t ROTATE180_MS         = 1000; // tune manually — how long TURNING_SPEED gives you 180°
 const uint8_t  CORRECTION_SPEED     = 25;   // used by strafeLeft
 const uint8_t  LEFT_SPEED           = 40;   // advance speed, left side
@@ -903,20 +903,20 @@ bool returnToCheckpoint() {
   // reverseShort(100);
   if (!rotate90()) return false;
   delay(500);
-  reverseShort(300);
+  reverseShort(400);
   if (!searchAndCenterLine()) return false;
   if (!rotate90()) return false;
   return searchAndCenterLine();
 }
 
-// for path 2 (not finished yet)
-bool returnToCheckpoint2() {
-  if (!robotReverse()) return false;
-  if (!searchAndCenterLine()) return false;
-  if (!rotate90Left()) return false;
-  // reverseShort(100);
-  return searchAndCenterLine();
-}
+// // for path 2 (not finished yet)
+// bool returnToCheckpoint2() {
+//   if (!robotReverse()) return false;
+//   if (!searchAndCenterLine()) return false;
+//   if (!rotate90Left()) return false;
+//   // reverseShort(100);
+//   return searchAndCenterLine();
+// }
 
 void moveSlowly(int targetCount) {
   followLineWithTarget(targetCount, SLOW_LEFT_SPEED, SLOW_RIGHT_SPEED, SLOW_LINE_TURN_SPEED);
@@ -955,7 +955,7 @@ void path1() {
   // if (!rotate180(800)) return;
   if (!rotate90()) return;
   delay(500);
-  reverseShort(300);
+  reverseShort(400);
   if (!searchAndCenterLine()) return;
   if (!rotate90()) return;
   // delay(500);
@@ -1018,7 +1018,7 @@ void path2() {
   openGripper(isGripperOpen);
   if (waitOrStop(5000)) return;
   isGripperOpen = !isGripperOpen;
-  if (!returnToCheckpoint2()) return;
+  if (!returnToCheckpoint()) return;
   if (!searchAndCenterLine()) return;
 }
 
@@ -1027,10 +1027,15 @@ void path3() {
   // strafe replacement
   // if (!rotate90()) return;
   // delay(500);
+  followLineWithTarget(3);
+  delay(500);
+  reverseShort(300);
+  if (!rotate90()) return;
+  delay(500);
   followLineWithTarget(2);
   if (!searchAndCenterLine()) return;
   if (!rotate90Left()) return;
-  // delay(500);
+  delay(500);
   // reverseShort(300);
   if (!searchAndCenterLine()) return;
   followLineWithDistance();
