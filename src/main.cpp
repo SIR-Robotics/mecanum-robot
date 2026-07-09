@@ -64,6 +64,7 @@ int blackR = 5109, blackG = 4806, blackB = 4189;
 int           numLines        = 0;
 bool          wasOnFullLine   = false;
 bool          stopAll         = false;
+unsigned long statusLedOffAtMs = 0;
 
 volatile unsigned long echoRiseUs = 0;
 volatile unsigned long echoDurationUs = 0;
@@ -957,6 +958,7 @@ void setup() {
   bool wifiConnected = connectEsp32Wifi();
   robot.right_led(wifiConnected);
   robot.left_led(wifiConnected);
+  if (wifiConnected) statusLedOffAtMs = millis() + 1000;
   servo.attach(SERVO_PIN);
   servo.write(gripperAngle);
   // delay(1000);
@@ -1102,6 +1104,13 @@ void path3() {
 
 void loop() {
   logEsp32Messages();
+
+  // init success
+  if (statusLedOffAtMs > 0 && millis() >= statusLedOffAtMs) {
+    robot.right_led(false);
+    robot.left_led(false);
+    statusLedOffAtMs = 0;
+  }
 
   int key = IRreceive.getKey();
 
