@@ -45,7 +45,7 @@ const uint8_t  GRIPPER_OPEN_ANGLE   = 2;
 const uint8_t  GRIPPER_CLOSE_ANGLE  = 180;
 const uint8_t  GRIPPER_STEP_DELAY_MS = 10;
 const uint16_t REVERSE_BLIND_MS     = 500;
-const uint16_t ROTATE_SENSOR_GRACE_MS = 100;
+const uint16_t ROTATE_SENSOR_GRACE_MS = 200;
 
 // Tuning constants — adjust to taste (for searchAndCenterLine)
 const uint16_t SEARCH_SWEEP_INITIAL_MS = 300;   // first sweep half-width
@@ -1031,6 +1031,9 @@ void path2() {
   delay(1000);
   followLineWithTarget(2);
   // if (!searchAndCenterLine()) return;
+  delay(500);
+  moveShort(200);
+  delay(500);
   if (!rotate90()) return;
   delay(100);
   // if (!searchAndCenterLine()) return;
@@ -1084,7 +1087,7 @@ void path3() {
   delay(500);
   followLineWithTarget(2);
   delay(500);
-  moveShort(200);
+  moveShort(300);
   delay(500);
   // if (!searchAndCenterLine()) return;
   if (!rotate90Left()) return;
@@ -1099,25 +1102,23 @@ void path3() {
   if (waitOrStop(5000)) return;
   isGripperOpen = !isGripperOpen;
 
-  reverseShort(800);
+  reverseShort(300);
   delay(500);
   if (!rotate90Left()) return;
   delay(500);
   // if (!searchAndCenterLine()) return;
-  delay(500);
+  // delay(500);
   followLineWithTarget(2);
   if (stopAll) return;
-  moveShort(200);
-
-  followLineWithTarget(2);
   delay(500);
   moveShort(200);
+  delay(500);
   if (!rotate90Left()) return;
   // reverseShort(300);
   // delay(500);
   
   if (!searchAndCenterLine()) return;
-  followLineWithTarget(3);
+  followLineWithTarget(4);
   delay(1000);
   moveSlowly(2);
   if (stopAll) return;
