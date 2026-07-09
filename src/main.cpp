@@ -958,7 +958,7 @@ void setup() {
   bool wifiConnected = connectEsp32Wifi();
   robot.right_led(wifiConnected);
   robot.left_led(wifiConnected);
-  if (wifiConnected) statusLedOffAtMs = millis() + 1000;
+  if (wifiConnected) statusLedOffAtMs = millis() + 2000;
   servo.attach(SERVO_PIN);
   servo.write(gripperAngle);
   // delay(1000);
