@@ -31,13 +31,11 @@ const uint8_t TRIG_PIN = 12;
 const uint8_t SERVO_PIN = 9;
 
 const uint8_t  TURNING_SPEED        = 54;
-const uint16_t ROTATE180_MS         = 1000; // tune manually — how long TURNING_SPEED gives you 180°
-const uint8_t  CORRECTION_SPEED     = 25;   // used by strafeLeft
-const uint8_t  LEFT_SPEED           = 40;   // advance speed, left side
-const uint8_t  RIGHT_SPEED          = 42;   // advance speed, right side (trim for asymmetry)
+const uint8_t  LEFT_SPEED           = 35;   // advance speed, left side
+const uint8_t  RIGHT_SPEED          = 35;   // advance speed, right side (trim for asymmetry)
 const uint8_t  LINE_TURN_SPEED      = 25;   // spin speed for line-follow corrections
 const uint8_t  SLOW_LEFT_SPEED      = 30;
-const uint8_t  SLOW_RIGHT_SPEED     = 32;
+const uint8_t  SLOW_RIGHT_SPEED     = 30;
 const uint8_t  SLOW_LINE_TURN_SPEED = 28;
 const uint8_t  LINE_TICK_MS         = 12;   // follow-loop tick delay
 const uint16_t OBSTACLE_DISTANCE_CM = 7;
@@ -52,6 +50,7 @@ const uint8_t  GRIPPER_CLOSE_ANGLE  = 180;
 const uint8_t  GRIPPER_STEP_DELAY_MS = 10;
 const uint16_t REVERSE_BLIND_MS     = 500;
 const uint16_t ROTATE_SENSOR_GRACE_MS = 200;
+const uint16_t BRAKE_MS = 50;   // counter-pulse duration to cancel turn momentum — tune empirically (too long = kicks back the other way)
 
 // Tuning constants — adjust to taste (for searchAndCenterLine)
 const uint16_t SEARCH_SWEEP_INITIAL_MS = 300;   // first sweep half-width
@@ -70,10 +69,6 @@ bool          wasOnFullLine   = false;
 bool          stopAll         = false;
 unsigned long statusLedOffAtMs = 0;
 
-volatile unsigned long echoRiseUs = 0;
-volatile unsigned long echoDurationUs = 0;
-volatile bool echoDurationReady = false;
-
 const uint8_t  STOP_KEY             = 64;
 
 // ==========================================================================
@@ -83,21 +78,6 @@ const uint8_t  STOP_KEY             = 64;
 struct RGB { uint8_t r, g, b; };
 
 enum class ColorLabel { Red, Blue, Yellow };
-
-enum UltrasonicState : uint8_t {
-  ULTRASONIC_IDLE,
-  ULTRASONIC_TRIGGER_LOW,
-  ULTRASONIC_TRIGGER_HIGH,
-  ULTRASONIC_WAIT_ECHO
-};
-
-struct UltrasonicReading {
-  UltrasonicState state;
-  unsigned long   lastSampleMs;
-  unsigned long   stateStartUs;
-  uint16_t        distanceCm;
-  bool            sampleReady;
-};
 
 // ==========================================================================
 //  FORWARD DECLARATIONS
@@ -123,16 +103,19 @@ bool       fetchYellow();
 void       sendArmCommand(int colorRes);
 
 void       turnRight90();
+void       brakePulse(void (mecanumCar::*counterMove)());
 bool       moveShort(uint16_t durationMs = 300);
 bool       reverseShort(uint16_t durationMs = 300);
 bool       robotReverse(uint16_t timeoutMs = 2500, uint16_t reverseBlindMs = REVERSE_BLIND_MS);
 void       strafeLeft(int targetCount);
-void       strafeRight(int targetCount);
 
-bool       rotate180(int ms);
 bool       rotate90(uint8_t turnSpeed = TURNING_SPEED, uint16_t timeoutMs = 3000);
 bool       rotate90Left(uint8_t turnSpeed = TURNING_SPEED, uint16_t timeoutMs = 3000);
+bool       rotate180(uint8_t turnSpeed = TURNING_SPEED, uint16_t timeoutMs = 5000);
 
+void       steerAlongLine(uint8_t SL, uint8_t SM, uint8_t SR,
+                          uint8_t leftSpeed, uint8_t rightSpeed, uint8_t turnSpeed,
+                          int8_t &lastSeenSide);
 void       followLineWithTarget(int targetCount, uint8_t leftSpeed, uint8_t rightSpeed, uint8_t turnSpeed);
 void       followLineWithTarget(int targetCount);
 bool       followLineForMs(uint16_t ms);
@@ -140,7 +123,6 @@ void       moveSlowly(int targetCount);
 
 uint16_t   readUltrasonic();
 uint16_t   readUltrasonicMedian();
-void       updateUltrasonic(UltrasonicReading &sensor);
 
 bool       followLineWithDistance(uint8_t leftSpeed, uint8_t rightSpeed, uint8_t turnSpeed, uint16_t stopDistanceCm);
 void       followLineWithDistance();
@@ -339,6 +321,19 @@ void sendArmCommand(int colorRes) {
 //  MOTION PRIMITIVES
 // ==========================================================================
 
+// Counter-pulse brake: briefly drive the opposite direction at the speed already
+// set by the caller to cancel momentum, then coast-stop. No encoders, so the pulse
+// can't be computed from actual speed — BRAKE_MS is hand-tuned. `counterMove` is the
+// motor primitive that spins/strafes opposite to the motion being braked.
+void brakePulse(void (mecanumCar::*counterMove)()) {
+  Serial.print("Brake pulse ");
+  Serial.print(BRAKE_MS);
+  Serial.println("ms");
+  (robot.*counterMove)();
+  delay(BRAKE_MS);
+  robot.Stop();
+}
+
 void turnRight90() {
   Serial.println("Turning right 90 degrees...");
   speed_Upper_L = speed_Lower_L = speed_Upper_R = speed_Lower_R = TURNING_SPEED;
@@ -346,10 +341,10 @@ void turnRight90() {
   delay(300);
   robot.Turn_Right();
   delay(500);
-  robot.Stop();
+  brakePulse(&mecanumCar::Turn_Left);   // cancel rotation momentum
   robot.L_Move();
   delay(400);
-  robot.Stop();
+  brakePulse(&mecanumCar::R_Move);      // cancel strafe momentum
 }
 
 bool moveShort(uint16_t durationMs) {
@@ -462,52 +457,9 @@ void strafeLeft(int targetCount) {
   robot.Stop();
 }
 
-void strafeRight(int targetCount) {
-  int detectedLines = 0;
-  bool wasOnRightLine = false;
-
-  speed_Upper_L = speed_Lower_L = speed_Upper_R = speed_Lower_R = 60;
-
-  Serial.print("Strafing right. Target right lines: ");
-  Serial.println(targetCount);
-
-  while (detectedLines < targetCount) {
-    if (stopRequested()) {
-      robot.Stop();
-      return;
-    }
-
-    uint8_t SR = digitalRead(LINE_RIGHT_PIN);
-
-    if (SR == HIGH) {
-      if (!wasOnRightLine) {
-        detectedLines++;
-        wasOnRightLine = true;
-        Serial.print("Right line detected: ");
-        Serial.print(detectedLines);
-        Serial.print("/");
-        Serial.println(targetCount);
-      }
-    } else {
-      wasOnRightLine = false;
-    }
-
-    robot.R_Move();
-    delay(LINE_TICK_MS);
-  }
-
-  robot.Stop();
-}
-
 // ==========================================================================
-//  ROTATION (90 / 180)
+//  ROTATION (90°)
 // ==========================================================================
-
-bool rotate180(int ms) {
-  (void)ms;
-  Serial.println("Rotating 180 degrees...");
-  return rotate90() && rotate90();
-}
 
 bool rotate90(uint8_t turnSpeed, uint16_t timeoutMs) {
   Serial.println("Rotating 90 degrees until right sensor detects line...");
@@ -515,7 +467,7 @@ bool rotate90(uint8_t turnSpeed, uint16_t timeoutMs) {
   unsigned long startMs = millis();
 
   speed_Upper_L = speed_Lower_L = speed_Lower_R = turnSpeed;
-  speed_Upper_R = turnSpeed + 2; // slight trim for asymmetry
+  speed_Upper_R = turnSpeed; // slight trim for asymmetry
 
   while (millis() - startMs < timeoutMs) {
     if (stopRequested()) {
@@ -526,7 +478,7 @@ bool rotate90(uint8_t turnSpeed, uint16_t timeoutMs) {
     uint8_t SR = digitalRead(LINE_RIGHT_PIN);
 
     if (millis() - startMs >= ROTATE_SENSOR_GRACE_MS && SR == HIGH) {
-      robot.Stop();
+      brakePulse(&mecanumCar::Turn_Left);   // cancel spin momentum before centering
       Serial.println("Right sensor detected line.");
       return searchAndCenterLine(1500, +1);
     }
@@ -545,7 +497,7 @@ bool rotate90Left(uint8_t turnSpeed, uint16_t timeoutMs) {
 
   unsigned long startMs = millis();
 
-  speed_Upper_L = turnSpeed + 2; // slight trim for asymmetry
+  speed_Upper_L = turnSpeed; // slight trim for asymmetry
   speed_Lower_L = speed_Upper_R = speed_Lower_R = turnSpeed;
 
   while (millis() - startMs < timeoutMs) {
@@ -557,7 +509,7 @@ bool rotate90Left(uint8_t turnSpeed, uint16_t timeoutMs) {
     uint8_t SL = digitalRead(LINE_LEFT_PIN);
 
     if (millis() - startMs >= ROTATE_SENSOR_GRACE_MS && SL == HIGH) {
-      robot.Stop();
+      brakePulse(&mecanumCar::Turn_Right);   // cancel spin momentum before centering
       Serial.println("Left sensor detected line.");
       return searchAndCenterLine(1500, -1);
     }
@@ -571,14 +523,84 @@ bool rotate90Left(uint8_t turnSpeed, uint16_t timeoutMs) {
   return false;
 }
 
+// Single continuous 180° spin — an alternative to calling rotate90() twice.
+// Same logic as rotate90 (spin right, grace period, brake pulse, then center),
+// but counts right-sensor line crossings and stops on the 2nd: the first crossing
+// is the ~90° line, the second is the ~180° line. Added for A/B comparison against
+// the two-90 method in path1; timeout is larger since the spin is twice as long.
+bool rotate180(uint8_t turnSpeed, uint16_t timeoutMs) {
+  Serial.println("Rotating 180 degrees (single spin) until 2nd right-line crossing...");
+
+  unsigned long startMs = millis();
+
+  speed_Upper_L = speed_Lower_L = speed_Lower_R = turnSpeed;
+  speed_Upper_R = turnSpeed;
+
+  uint8_t crossings = 0;
+  bool onLine = false;   // true while the right sensor is currently over a line
+
+  while (millis() - startMs < timeoutMs) {
+    if (stopRequested()) {
+      robot.Stop();
+      return false;
+    }
+
+    uint8_t SR = digitalRead(LINE_RIGHT_PIN);
+
+    if (millis() - startMs >= ROTATE_SENSOR_GRACE_MS) {
+      if (SR == HIGH && !onLine) {          // rising edge → a new line crossing
+        onLine = true;
+        crossings++;
+        if (crossings >= 2) {
+          brakePulse(&mecanumCar::Turn_Left);   // cancel spin momentum before centering
+          Serial.println("Second line crossing — 180° reached.");
+          return searchAndCenterLine(1500, +1);
+        }
+      } else if (SR == LOW) {               // left the line; ready for next crossing
+        onLine = false;
+      }
+    }
+
+    robot.Turn_Right();
+    delay(LINE_TICK_MS);
+  }
+  robot.Stop();
+  delay(1000);
+  Serial.println("Rotate 180 timeout. Second line crossing not detected.");
+  return false;
+}
+
 // ==========================================================================
 //  LINE FOLLOWING
 // ==========================================================================
 
+// One steering step shared by every line-follower. Middle sensor owns the lane;
+// side sensors correct only when the middle is off; if the line is lost entirely,
+// keep turning toward whichever side saw it last. `lastSeenSide` is updated in
+// place (+1 = line last seen on right, -1 = left).
+void steerAlongLine(uint8_t SL, uint8_t SM, uint8_t SR,
+                    uint8_t leftSpeed, uint8_t rightSpeed, uint8_t turnSpeed,
+                    int8_t &lastSeenSide) {
+  if (SM == HIGH || (SL == HIGH && SR == HIGH)) {
+    speed_Upper_L = speed_Lower_L = leftSpeed;
+    speed_Upper_R = speed_Lower_R = rightSpeed;
+    robot.Advance();
+  } else if (SL == LOW && SR == HIGH) {
+    lastSeenSide = +1;
+    speed_Upper_L = speed_Lower_L = speed_Upper_R = speed_Lower_R = turnSpeed;
+    robot.Turn_Right();
+  } else if (SR == LOW && SL == HIGH) {
+    lastSeenSide = -1;
+    speed_Upper_L = speed_Lower_L = speed_Upper_R = speed_Lower_R = turnSpeed;
+    robot.Turn_Left();
+  } else {
+    speed_Upper_L = speed_Lower_L = speed_Upper_R = speed_Lower_R = turnSpeed;
+    (lastSeenSide < 0) ? robot.Turn_Left() : robot.Turn_Right();
+  }
+}
+
 // ── Basic 3-sensor line-follow (KS0560 lesson_6 pattern) ─────────────────────
-// Advance when middle sensor is on the line and sides are clear.
-// Spin toward whichever side sensor picks up the line.
-// Count all-black as a full line crossing; stop when count hits targetCount.
+// Follow the line, counting all-black crossings; stop when count hits targetCount.
 void followLineWithTarget(int targetCount, uint8_t leftSpeed, uint8_t rightSpeed, uint8_t turnSpeed) {
   numLines      = 0;
   wasOnFullLine = false;
@@ -619,24 +641,7 @@ void followLineWithTarget(int targetCount, uint8_t leftSpeed, uint8_t rightSpeed
       wasOnFullLine = false;
     }
 
-    // Middle sensor owns the lane. Side sensors only correct when middle is off.
-    if (SM == HIGH || (SL == HIGH && SR == HIGH)) {
-      speed_Upper_L = speed_Lower_L = leftSpeed;
-      speed_Upper_R = speed_Lower_R = rightSpeed;
-      robot.Advance();
-    } else if (SL == LOW && SR == HIGH) {
-      lastSeenSide = +1;
-      speed_Upper_L = speed_Lower_L = speed_Upper_R = speed_Lower_R = turnSpeed;
-      robot.Turn_Right();
-    } else if (SR == LOW && SL == HIGH) {
-      lastSeenSide = -1;
-      speed_Upper_L = speed_Lower_L = speed_Upper_R = speed_Lower_R = turnSpeed;
-      robot.Turn_Left();
-    } else {
-      speed_Upper_L = speed_Lower_L = speed_Upper_R = speed_Lower_R = turnSpeed;
-      (lastSeenSide < 0) ? robot.Turn_Left() : robot.Turn_Right();
-    }
-
+    steerAlongLine(SL, SM, SR, leftSpeed, rightSpeed, turnSpeed, lastSeenSide);
     delay(LINE_TICK_MS);
   }
 }
@@ -661,23 +666,7 @@ bool followLineForMs(uint16_t ms) {
     uint8_t SM = digitalRead(LINE_MIDDLE_PIN);
     uint8_t SR = digitalRead(LINE_RIGHT_PIN);
 
-    if (SM == HIGH || (SL == HIGH && SR == HIGH)) {
-      speed_Upper_L = speed_Lower_L = LEFT_SPEED;
-      speed_Upper_R = speed_Lower_R = RIGHT_SPEED;
-      robot.Advance();
-    } else if (SL == LOW && SR == HIGH) {
-      lastSeenSide = +1;
-      speed_Upper_L = speed_Lower_L = speed_Upper_R = speed_Lower_R = LINE_TURN_SPEED;
-      robot.Turn_Right();
-    } else if (SR == LOW && SL == HIGH) {
-      lastSeenSide = -1;
-      speed_Upper_L = speed_Lower_L = speed_Upper_R = speed_Lower_R = LINE_TURN_SPEED;
-      robot.Turn_Left();
-    } else {
-      speed_Upper_L = speed_Lower_L = speed_Upper_R = speed_Lower_R = LINE_TURN_SPEED;
-      (lastSeenSide < 0) ? robot.Turn_Left() : robot.Turn_Right();
-    }
-
+    steerAlongLine(SL, SM, SR, LEFT_SPEED, RIGHT_SPEED, LINE_TURN_SPEED, lastSeenSide);
     delay(LINE_TICK_MS);
   }
 
@@ -716,65 +705,6 @@ uint16_t readUltrasonicMedian() {
   if (b > c) { uint16_t t = b; b = c; c = t; }
   if (a > b) { uint16_t t = a; a = b; b = t; }
   return b;
-}
-
-// Advances one ultrasonic measurement without blocking line tracking.
-void updateUltrasonic(UltrasonicReading &sensor) {
-  unsigned long nowUs = micros();
-  sensor.sampleReady = false;
-
-  switch (sensor.state) {
-    case ULTRASONIC_IDLE:
-      if (millis() - sensor.lastSampleMs >= ULTRASONIC_SAMPLE_MS) {
-        sensor.lastSampleMs = millis();
-        sensor.stateStartUs = nowUs;
-        digitalWrite(TRIG_PIN, LOW);
-        sensor.state = ULTRASONIC_TRIGGER_LOW;
-      }
-      break;
-
-    case ULTRASONIC_TRIGGER_LOW:
-      if (nowUs - sensor.stateStartUs >= 2) {
-        digitalWrite(TRIG_PIN, HIGH);
-        sensor.stateStartUs = nowUs;
-        sensor.state = ULTRASONIC_TRIGGER_HIGH;
-      }
-      break;
-
-    case ULTRASONIC_TRIGGER_HIGH:
-      if (nowUs - sensor.stateStartUs >= 10) {
-        noInterrupts();
-        echoRiseUs = 0;
-        echoDurationReady = false;
-        interrupts();
-        digitalWrite(TRIG_PIN, LOW);
-        sensor.stateStartUs = nowUs;
-        sensor.state = ULTRASONIC_WAIT_ECHO;
-      }
-      break;
-
-    case ULTRASONIC_WAIT_ECHO: {
-      noInterrupts();
-      bool echoReady = echoDurationReady;
-      unsigned long durationUs = echoDurationUs;
-      echoDurationReady = false;
-      interrupts();
-
-      if (echoReady) {
-        sensor.distanceCm = durationUs / 58.2;
-        sensor.sampleReady = true;
-        sensor.state = ULTRASONIC_IDLE;
-      } else if (nowUs - sensor.stateStartUs >= ULTRASONIC_TIMEOUT_US) {
-        noInterrupts();
-        echoRiseUs = 0;
-        interrupts();
-        sensor.distanceCm = 999;
-        sensor.sampleReady = true;
-        sensor.state = ULTRASONIC_IDLE;
-      }
-      break;
-    }
-  }
 }
 
 // ==========================================================================
@@ -832,24 +762,7 @@ bool followLineWithDistance(uint8_t leftSpeed, uint8_t rightSpeed, uint8_t turnS
     uint8_t SM = digitalRead(LINE_MIDDLE_PIN);
     uint8_t SR = digitalRead(LINE_RIGHT_PIN);
 
-    // Middle sensor owns the lane. Side sensors only correct when middle is off.
-    if (SM == HIGH || (SL == HIGH && SR == HIGH)) {
-      speed_Upper_L = speed_Lower_L = leftSpeed;
-      speed_Upper_R = speed_Lower_R = rightSpeed;
-      robot.Advance();
-    } else if (SL == LOW && SR == HIGH) {
-      lastSeenSide = +1;
-      speed_Upper_L = speed_Lower_L = speed_Upper_R = speed_Lower_R = turnSpeed;
-      robot.Turn_Right();
-    } else if (SR == LOW && SL == HIGH) {
-      lastSeenSide = -1;
-      speed_Upper_L = speed_Lower_L = speed_Upper_R = speed_Lower_R = turnSpeed;
-      robot.Turn_Left();
-    } else {
-      speed_Upper_L = speed_Lower_L = speed_Upper_R = speed_Lower_R = turnSpeed;
-      (lastSeenSide < 0) ? robot.Turn_Left() : robot.Turn_Right();
-    }
-
+    steerAlongLine(SL, SM, SR, leftSpeed, rightSpeed, turnSpeed, lastSeenSide);
     delay(LINE_TICK_MS);
   }
 }
@@ -858,7 +771,7 @@ bool followLineWithDistance(uint8_t leftSpeed, uint8_t rightSpeed, uint8_t turnS
 // detected within OBSTACLE_DISTANCE_CM or STOP is pressed.
 void followLineWithDistance() {
   if (followLineWithDistance(LEFT_SPEED, RIGHT_SPEED, LINE_TURN_SPEED, APPROACH_DISTANCE_CM)) {
-    delay(1000);
+    if (waitOrStop(1000)) return;
     moveSlowlyToObject();
   }
 }
@@ -1004,9 +917,8 @@ int gripAndIdentifyColor(bool gOpen) {
   Serial.println("Checking TCS3200 color...");
   ColorLabel label = classifyColor();
 
-  // servo.write(180);
   openGripper(gOpen);
-  delay(1000);
+  if (waitOrStop(1000)) return -1;
 
   if (label == ColorLabel::Blue) {
     Serial.println("Blue detected. Gripper closed at 180.");
@@ -1030,7 +942,7 @@ bool returnToCheckpoint() {
   if (!searchAndCenterLine()) return false;
   if (!rotate90()) return false;
   if (!searchAndCenterLine()) return false;
-  delay(500);
+  if (waitOrStop(500)) return false;
   reverseShort(200);
   if (!searchAndCenterLine()) return false;
   if (!rotate90()) return false;
@@ -1049,26 +961,30 @@ void path1() {
   if (stopAll) return;
   int colorRes = gripAndIdentifyColor(isGripperOpen);
   if (waitOrStop(5000)) return;
-  delay(300);
+  if (waitOrStop(300)) return;
   isGripperOpen = !isGripperOpen;
 
+  // ── Phase 2: turn around onto the drop lane ──
+  // METHOD A — two discrete 90° turns (currently active).
+  //            Comment this block out to try METHOD B.
+  // if (!rotate90()) return;
+  // if (waitOrStop(500)) return;
+  // if (!searchAndCenterLine()) return;
+  // reverseShort(200);
+  // if (waitOrStop(500)) return;
+  // if (!rotate90()) return;
+  // if (!searchAndCenterLine()) return;
 
-  // ── Phase 2: turn around (two right turns) onto the drop lane ──
-  // if (!rotate180(800)) return;
-  if (!rotate90()) return;
-  delay(500);
-  // reverseShort(400);
-  if (!searchAndCenterLine()) return;
-  if (!rotate90()) return;
-  // delay(500);
+  // METHOD B — single continuous 180° spin.
+  //            Uncomment these two lines and comment out METHOD A above.
+  if (!rotate180()) return;
   if (!searchAndCenterLine()) return;
 
   // ── Phase 3: drive to the drop zone and release the object ──
   followLineWithTarget(5);
-  delay(1000);
-  if (stopAll) return;
+  if (waitOrStop(1000)) return;
   moveSlowly(2);
-  delay(1000);
+  if (waitOrStop(1000)) return;
   openGripper(isGripperOpen);
   if (waitOrStop(5000)) return;
   isGripperOpen = !isGripperOpen;
@@ -1082,69 +998,46 @@ void path1() {
 // path2 — LEFT-side run. Fetches the object from the left branch and brings
 // it to the drop zone (mirror of path3; distances are hand-tuned per side).
 void path2() {
-
   // ── Phase 1: turn onto the object lane (left, then in) ──
-  // rotate to left 
   followLineWithTarget(3);
-  delay(1000);
-  // reverseShort(100);
-  moveShort(200);
-  delay(500);
+  if (waitOrStop(1000)) return;
+  moveShort(400);
+  if (waitOrStop(500)) return;
   if (!rotate90Left()) return;
-  delay(1000);
+  if (waitOrStop(1000)) return;
   followLineWithTarget(2);
-  delay(500);
+  if (waitOrStop(500)) return;
   moveShort(100);
-  delay(500);
+  if (waitOrStop(500)) return;
   if (!rotate90()) return;
-  delay(500);
-  // if (!searchAndCenterLine()) return;
+  if (waitOrStop(500)) return;
 
   // ── Phase 2: approach the object, grip & identify its colour ──
   followLineWithDistance();
-  if (stopAll) return;
-  delay(500);
+  if (waitOrStop(500)) return;
   int colorRes = gripAndIdentifyColor(isGripperOpen);
   if (colorRes < 0) return;
-  delay(500);
+  if (waitOrStop(500)) return;
   if (waitOrStop(1000)) return;
   isGripperOpen = !isGripperOpen;
-  delay(1000);
+  if (waitOrStop(1000)) return;
 
   // ── Phase 3: back off and navigate to the drop lane ──
   reverseShort(150);
-  delay(500);
+  if (waitOrStop(500)) return;
   if (!rotate90()) return;
-  delay(500);
-  // if (!searchAndCenterLine()) return;
-  delay(500);
+  if (waitOrStop(1000)) return;
   followLineWithTarget(2);
-  if (stopAll) return;
-  delay(500);
-  moveShort(200);
-  delay(500);
+  if (waitOrStop(500)) return;
+  moveShort(300);
+  if (waitOrStop(500)) return;
   if (!rotate90()) return;
-  
-  // reverseShort(200);
-  // delay(500);
-  // if (!rotate90()) return;
-  // delay(500);
-  // // reverseShort(300);
-  // // if (!searchAndCenterLine()) return;
-  // followLineWithTarget(2);
-  // delay(1000);
-  // moveShort(200);
-  // delay(500);
-  // if (!rotate90()) return;
-  // // reverseShort(300);
-  // delay(500);
 
   // ── Phase 4: final approach and release the object ──
-  followLineWithTarget(5);
-  delay(1000);
-  if (stopAll) return;
+  followLineWithTarget(4);
+  if (waitOrStop(1000)) return;
   moveSlowly(2);
-  delay(1000);
+  if (waitOrStop(1000)) return;
   openGripper(isGripperOpen);
   if (waitOrStop(5000)) return;
   isGripperOpen = !isGripperOpen;
@@ -1158,22 +1051,18 @@ void path2() {
 // branch and brings it to the drop zone (hand-tuned distances differ from path2).
 void path3() {
   // ── Phase 1: turn onto the object lane (right, then in) ──
-  // strafeRight(2); 
-  // strafe replacement
-  // if (!rotate90()) return;
-  // delay(500);
   followLineWithTarget(3);
-  delay(500);
+  if (waitOrStop(500)) return;
   moveShort(150);
-  delay(500);
+  if (waitOrStop(500)) return;
   if (!rotate90()) return;
-  delay(500);
+  if (waitOrStop(500)) return;
   followLineWithTarget(2);
-  delay(500);
+  if (waitOrStop(500)) return;
   moveShort(300);
-  delay(500);
+  if (waitOrStop(500)) return;
   if (!rotate90Left()) return;
-  delay(500);
+  if (waitOrStop(500)) return;
 
   // ── Phase 2: approach the object, grip & identify its colour ──
   followLineWithDistance();
@@ -1186,25 +1075,21 @@ void path3() {
 
   // ── Phase 3: back off and navigate to the drop lane ──
   reverseShort(150);
-  delay(500);
+  if (waitOrStop(500)) return;
   if (!rotate90Left()) return;
-  delay(500);
-  // if (!searchAndCenterLine()) return;
-  delay(500);
+  if (waitOrStop(1000)) return;
   followLineWithTarget(2);
-  if (stopAll) return;
-  delay(500);
-  moveShort(200);
-  delay(500);
+  if (waitOrStop(500)) return;
+  moveShort(400);
+  if (waitOrStop(500)) return;
   if (!rotate90Left()) return;
 
   // ── Phase 4: final approach and release the object ──
   if (!searchAndCenterLine()) return;
-  followLineWithTarget(5);
-  delay(1000);
-  if (stopAll) return;
+  followLineWithTarget(4);
+  if (waitOrStop(1000)) return;
   moveSlowly(2);
-  delay(1000);
+  if (waitOrStop(1000)) return;
   openGripper(isGripperOpen);
   if (waitOrStop(5000)) return;
   isGripperOpen = !isGripperOpen;
@@ -1234,7 +1119,6 @@ void setup() {
   if (wifiConnected) statusLedOffAtMs = millis() + 2000;
   servo.attach(SERVO_PIN);
   servo.write(gripperAngle);
-  // delay(1000);
   Serial.println("Ready. Press IR to start.");
 }
 
@@ -1250,10 +1134,14 @@ void loop() {
 
   int key = IRreceive.getKey();
 
+  // A fresh command key (getKey returns -1 when idle) re-arms the robot after an
+  // emergency stop. The stop buttons are excluded so they never clear their own flag.
+  if (key != -1 && key != 70 && key != STOP_KEY) {
+    stopAll = false;
+  }
+
   switch (key) {
     case 22: // challenge 1
-      // stopAll = false;
-      // followLineWithTarget(7);
       returnToCheckpoint();
       if (!searchAndCenterLine()) return;
       followLineWithTarget(3);
@@ -1265,11 +1153,10 @@ void loop() {
       break;
 
     case 13: { // challenge 3
-      stopAll = false;
       path1();
-      delay(1000);
+      if (waitOrStop(1000)) break;
       path2();
-      delay(1000);
+      if (waitOrStop(1000)) break;
       path3();
       robot.Stop();
       Serial.println("Done.");
@@ -1279,8 +1166,7 @@ void loop() {
     case 68: // left button
       if (!returnToCheckpoint()) return;
       if (!searchAndCenterLine()) return;
-      // if (!followLineForMs(500)) return;
-      delay(1000);
+      if (waitOrStop(1000)) return;
       followLineWithTarget(2);
       strafeLeft(2);
       if (!searchAndCenterLine()) return;
@@ -1288,16 +1174,10 @@ void loop() {
       break;
 
     case 70: // front button / stop everything
-      robot.Stop();
-      stopAll = true;
-      robot.right_led(false);
-      robot.left_led(false);
-      Serial.println("Stopped.");
+      stopEverything();
       break;
 
     case 12: // number 4
-      // stopAll = false;
-      // gripAndIdentifyColor(isGripperOpen);
       path2();
       break;
 
