@@ -30,27 +30,28 @@ const uint8_t TRIG_PIN = 12;
 // Servo Pin
 const uint8_t SERVO_PIN = 9;
 
-const uint8_t  TURNING_SPEED        = 54;
-const uint8_t  LEFT_SPEED           = 35;   // advance speed, left side
-const uint8_t  RIGHT_SPEED          = 35;   // advance speed, right side (trim for asymmetry)
+const uint8_t  TURNING_SPEED        = 50;
+const uint8_t  LEFT_SPEED           = 45;   // advance speed, left side
+const uint8_t  RIGHT_SPEED          = 45;   // advance speed, right side (trim for asymmetry)
 const uint8_t  LINE_TURN_SPEED      = 25;   // spin speed for line-follow corrections
 const uint8_t  SLOW_LEFT_SPEED      = 30;
 const uint8_t  SLOW_RIGHT_SPEED     = 30;
 const uint8_t  SLOW_LINE_TURN_SPEED = 28;
-const uint8_t  LINE_TICK_MS         = 12;   // follow-loop tick delay
+const uint8_t  LINE_TICK_MS         = 30;   // follow-loop tick delay
 const uint16_t OBSTACLE_DISTANCE_CM = 7;
 const uint16_t APPROACH_DISTANCE_CM = 20;
 const uint16_t ULTRASONIC_SAMPLE_MS = 50;
 const uint32_t ULTRASONIC_TIMEOUT_US = 12000;
 const uint8_t  ULTRASONIC_CONFIRM_READS = 3;
 const uint8_t  ULTRASONIC_STOP_HYSTERESIS_CM = 2;
-const uint8_t  LINE_SEARCH_SPEED    = 40;   // aggressive turning when line is lost
+const uint8_t  LINE_SEARCH_SPEED    = 30;   // aggressive turning when line is lost
 const uint8_t  GRIPPER_OPEN_ANGLE   = 2;
 const uint8_t  GRIPPER_CLOSE_ANGLE  = 180;
 const uint8_t  GRIPPER_STEP_DELAY_MS = 10;
 const uint16_t REVERSE_BLIND_MS     = 500;
 const uint16_t ROTATE_SENSOR_GRACE_MS = 200;
 const uint16_t BRAKE_MS = 50;   // counter-pulse duration to cancel turn momentum — tune empirically (too long = kicks back the other way)
+const uint16_t DRIFT_CORRECT_MS = 120;  // drift_left pulse after the 180° spin to pull the overshoot back onto the line — tune empirically
 
 // Tuning constants — adjust to taste (for searchAndCenterLine)
 const uint16_t SEARCH_SWEEP_INITIAL_MS = 300;   // first sweep half-width
@@ -552,9 +553,9 @@ bool rotate180(uint8_t turnSpeed, uint16_t timeoutMs) {
         onLine = true;
         crossings++;
         if (crossings >= 2) {
-          brakePulse(&mecanumCar::Turn_Left);   // cancel spin momentum before centering
+          robot.Stop();
           Serial.println("Second line crossing — 180° reached.");
-          return searchAndCenterLine(1500, +1);
+          return true;
         }
       } else if (SR == LOW) {               // left the line; ready for next crossing
         onLine = false;
@@ -771,7 +772,7 @@ bool followLineWithDistance(uint8_t leftSpeed, uint8_t rightSpeed, uint8_t turnS
 // detected within OBSTACLE_DISTANCE_CM or STOP is pressed.
 void followLineWithDistance() {
   if (followLineWithDistance(LEFT_SPEED, RIGHT_SPEED, LINE_TURN_SPEED, APPROACH_DISTANCE_CM)) {
-    if (waitOrStop(1000)) return;
+    delay(1000);
     moveSlowlyToObject();
   }
 }
@@ -918,7 +919,7 @@ int gripAndIdentifyColor(bool gOpen) {
   ColorLabel label = classifyColor();
 
   openGripper(gOpen);
-  if (waitOrStop(1000)) return -1;
+  delay(1000);
 
   if (label == ColorLabel::Blue) {
     Serial.println("Blue detected. Gripper closed at 180.");
@@ -942,7 +943,7 @@ bool returnToCheckpoint() {
   if (!searchAndCenterLine()) return false;
   if (!rotate90()) return false;
   if (!searchAndCenterLine()) return false;
-  if (waitOrStop(500)) return false;
+  delay(500);
   reverseShort(200);
   if (!searchAndCenterLine()) return false;
   if (!rotate90()) return false;
@@ -960,33 +961,37 @@ void path1() {
   followLineWithDistance();
   if (stopAll) return;
   int colorRes = gripAndIdentifyColor(isGripperOpen);
-  if (waitOrStop(5000)) return;
-  if (waitOrStop(300)) return;
+  delay(5000);
+  delay(300);
   isGripperOpen = !isGripperOpen;
 
   // ── Phase 2: turn around onto the drop lane ──
-  // METHOD A — two discrete 90° turns (currently active).
-  //            Comment this block out to try METHOD B.
+  // METHOD A — two discrete 90° turns. Uncomment this block and comment out METHOD B.
   // if (!rotate90()) return;
-  // if (waitOrStop(500)) return;
+  // delay(500);
   // if (!searchAndCenterLine()) return;
   // reverseShort(200);
-  // if (waitOrStop(500)) return;
+  // delay(500);
   // if (!rotate90()) return;
   // if (!searchAndCenterLine()) return;
 
-  // METHOD B — single continuous 180° spin.
-  //            Uncomment these two lines and comment out METHOD A above.
+  // METHOD B — single continuous 180° spin (currently active).
   if (!rotate180()) return;
+  // Drift left to straighten onto the line after the 180° (combats overshoot).
+  // Tune DRIFT_CORRECT_MS; swap to robot.drift_right() if it drifts the wrong way.
+  speed_Lower_L = speed_Lower_R = TURNING_SPEED;
+  robot.drift_left();
+  delay(DRIFT_CORRECT_MS);
+  robot.Stop();
   if (!searchAndCenterLine()) return;
 
   // ── Phase 3: drive to the drop zone and release the object ──
   followLineWithTarget(5);
-  if (waitOrStop(1000)) return;
+  delay(1000);
   moveSlowly(2);
-  if (waitOrStop(1000)) return;
+  delay(1000);
   openGripper(isGripperOpen);
-  if (waitOrStop(5000)) return;
+  delay(5000);
   isGripperOpen = !isGripperOpen;
 
   // ── Phase 4: signal the arm, then return to the checkpoint ──
@@ -999,47 +1004,56 @@ void path1() {
 // it to the drop zone (mirror of path3; distances are hand-tuned per side).
 void path2() {
   // ── Phase 1: turn onto the object lane (left, then in) ──
-  followLineWithTarget(3);
-  if (waitOrStop(1000)) return;
-  moveShort(400);
-  if (waitOrStop(500)) return;
-  if (!rotate90Left()) return;
-  if (waitOrStop(1000)) return;
   followLineWithTarget(2);
-  if (waitOrStop(500)) return;
+  delay(1000);
+  moveShort(200);
+  delay(500);
+  if (!rotate90Left()) return;
+  delay(1000);
+  followLineWithTarget(2);
+  delay(500);
   moveShort(100);
-  if (waitOrStop(500)) return;
+  delay(500);
   if (!rotate90()) return;
-  if (waitOrStop(500)) return;
+  delay(500);
+
+  // if (!rotate180()) return;
+  // // Drift left to straighten onto the line after the 180° (combats overshoot).
+  // // Tune DRIFT_CORRECT_MS; swap to robot.drift_right() if it drifts the wrong way.
+  // speed_Lower_L = speed_Lower_R = TURNING_SPEED;
+  // robot.drift_left();
+  // delay(DRIFT_CORRECT_MS);
+  // robot.Stop();
+  // if (!searchAndCenterLine()) return;
 
   // ── Phase 2: approach the object, grip & identify its colour ──
   followLineWithDistance();
-  if (waitOrStop(500)) return;
+  delay(500);
   int colorRes = gripAndIdentifyColor(isGripperOpen);
   if (colorRes < 0) return;
-  if (waitOrStop(500)) return;
-  if (waitOrStop(1000)) return;
+  delay(500);
+  delay(1000);
   isGripperOpen = !isGripperOpen;
-  if (waitOrStop(1000)) return;
+  delay(1000);
 
   // ── Phase 3: back off and navigate to the drop lane ──
-  reverseShort(150);
-  if (waitOrStop(500)) return;
+  reverseShort(100);
+  delay(500);
   if (!rotate90()) return;
-  if (waitOrStop(1000)) return;
+  delay(1000);
   followLineWithTarget(2);
-  if (waitOrStop(500)) return;
+  delay(500);
   moveShort(300);
-  if (waitOrStop(500)) return;
+  delay(500);
   if (!rotate90()) return;
 
   // ── Phase 4: final approach and release the object ──
-  followLineWithTarget(4);
-  if (waitOrStop(1000)) return;
-  moveSlowly(2);
-  if (waitOrStop(1000)) return;
+  followLineWithTarget(5);
+  delay(1000);
+  moveSlowly(3);
+  delay(1000);
   openGripper(isGripperOpen);
-  if (waitOrStop(5000)) return;
+  delay(5000);
   isGripperOpen = !isGripperOpen;
 
   // ── Phase 5: return to the checkpoint ──
@@ -1052,17 +1066,17 @@ void path2() {
 void path3() {
   // ── Phase 1: turn onto the object lane (right, then in) ──
   followLineWithTarget(3);
-  if (waitOrStop(500)) return;
+  delay(500);
   moveShort(150);
-  if (waitOrStop(500)) return;
+  delay(500);
   if (!rotate90()) return;
-  if (waitOrStop(500)) return;
+  delay(500);
   followLineWithTarget(2);
-  if (waitOrStop(500)) return;
+  delay(500);
   moveShort(300);
-  if (waitOrStop(500)) return;
+  delay(500);
   if (!rotate90Left()) return;
-  if (waitOrStop(500)) return;
+  delay(500);
 
   // ── Phase 2: approach the object, grip & identify its colour ──
   followLineWithDistance();
@@ -1070,28 +1084,28 @@ void path3() {
 
   int colorRes = gripAndIdentifyColor(isGripperOpen);
   if (colorRes < 0) return;
-  if (waitOrStop(5000)) return;
+  delay(5000);
   isGripperOpen = !isGripperOpen;
 
   // ── Phase 3: back off and navigate to the drop lane ──
   reverseShort(150);
-  if (waitOrStop(500)) return;
+  delay(500);
   if (!rotate90Left()) return;
-  if (waitOrStop(1000)) return;
+  delay(1000);
   followLineWithTarget(2);
-  if (waitOrStop(500)) return;
+  delay(500);
   moveShort(400);
-  if (waitOrStop(500)) return;
+  delay(500);
   if (!rotate90Left()) return;
 
   // ── Phase 4: final approach and release the object ──
   if (!searchAndCenterLine()) return;
   followLineWithTarget(4);
-  if (waitOrStop(1000)) return;
+  delay(1000);
   moveSlowly(2);
-  if (waitOrStop(1000)) return;
+  delay(1000);
   openGripper(isGripperOpen);
-  if (waitOrStop(5000)) return;
+  delay(5000);
   isGripperOpen = !isGripperOpen;
   // ── Phase 5: return to the checkpoint ──
   if (!returnToCheckpoint()) return;
@@ -1154,9 +1168,9 @@ void loop() {
 
     case 13: { // challenge 3
       path1();
-      if (waitOrStop(1000)) break;
+      delay(1000);
       path2();
-      if (waitOrStop(1000)) break;
+      delay(1000);
       path3();
       robot.Stop();
       Serial.println("Done.");
@@ -1166,7 +1180,7 @@ void loop() {
     case 68: // left button
       if (!returnToCheckpoint()) return;
       if (!searchAndCenterLine()) return;
-      if (waitOrStop(1000)) return;
+      delay(1000);
       followLineWithTarget(2);
       strafeLeft(2);
       if (!searchAndCenterLine()) return;
