@@ -33,12 +33,11 @@ const uint8_t SERVO_PIN = 9;
 const uint8_t  TURNING_SPEED        = 54;
 const uint8_t  LEFT_SPEED           = 35;   // advance speed, left side
 const uint8_t  RIGHT_SPEED          = 35;   // advance speed, right side (trim for asymmetry)
-const uint8_t  LINE_TURN_SPEED      = 31;   // inner-side speed for line-follow corrections
+const uint8_t  LINE_TURN_SPEED      = 25;   // spin speed for line-follow corrections
 const uint8_t  SLOW_LEFT_SPEED      = 30;
 const uint8_t  SLOW_RIGHT_SPEED     = 30;
 const uint8_t  SLOW_LINE_TURN_SPEED = 28;
 const uint8_t  LINE_TICK_MS         = 12;   // follow-loop tick delay
-const uint16_t LINE_INTERSECTION_MAX_MS = 250;
 const uint16_t OBSTACLE_DISTANCE_CM = 7;
 const uint16_t APPROACH_DISTANCE_CM = 20;
 const uint16_t ULTRASONIC_SAMPLE_MS = 50;
@@ -117,7 +116,6 @@ bool       rotate180(uint8_t turnSpeed = TURNING_SPEED, uint16_t timeoutMs = 500
 void       steerAlongLine(uint8_t SL, uint8_t SM, uint8_t SR,
                           uint8_t leftSpeed, uint8_t rightSpeed, uint8_t turnSpeed,
                           int8_t &lastSeenSide);
-bool       driveStraightThroughIntersection(uint8_t leftSpeed, uint8_t rightSpeed);
 void       followLineWithTarget(int targetCount, uint8_t leftSpeed, uint8_t rightSpeed, uint8_t turnSpeed);
 void       followLineWithTarget(int targetCount);
 bool       followLineForMs(uint16_t ms);
@@ -576,56 +574,30 @@ bool rotate180(uint8_t turnSpeed, uint16_t timeoutMs) {
 //  LINE FOLLOWING
 // ==========================================================================
 
-// One steering step shared by every line-follower. Middle sensor owns the lane;
-// side sensors correct only when the middle is off; if the line is lost entirely,
-// keep turning toward whichever side saw it last. `lastSeenSide` is updated in
-// place (+1 = line last seen on right, -1 = left).
+// One steering step shared by every line-follower, matching the KS0560
+// lesson_6 3-sensor tracking pattern.
 void steerAlongLine(uint8_t SL, uint8_t SM, uint8_t SR,
                     uint8_t leftSpeed, uint8_t rightSpeed, uint8_t turnSpeed,
                     int8_t &lastSeenSide) {
-  if (SM == HIGH || (SL == HIGH && SR == HIGH)) {
+  speed_Upper_L = speed_Lower_L = speed_Upper_R = speed_Lower_R = turnSpeed;
+
+  if (SL == LOW && SM == HIGH && SR == LOW) {
     speed_Upper_L = speed_Lower_L = leftSpeed;
     speed_Upper_R = speed_Lower_R = rightSpeed;
     robot.Advance();
   } else if (SL == LOW && SR == HIGH) {
     lastSeenSide = +1;
-    speed_Upper_L = speed_Lower_L = leftSpeed;
-    speed_Upper_R = speed_Lower_R = turnSpeed;
-    robot.Advance();
+    robot.Turn_Right();
   } else if (SR == LOW && SL == HIGH) {
     lastSeenSide = -1;
-    speed_Upper_L = speed_Lower_L = turnSpeed;
+    robot.Turn_Left();
+  } else if (SM == HIGH) {
+    speed_Upper_L = speed_Lower_L = leftSpeed;
     speed_Upper_R = speed_Lower_R = rightSpeed;
     robot.Advance();
   } else {
-    speed_Upper_L = speed_Lower_L = speed_Upper_R = speed_Lower_R = LINE_SEARCH_SPEED;
-    (lastSeenSide < 0) ? robot.Turn_Left() : robot.Turn_Right();
+    robot.Stop();
   }
-}
-
-bool driveStraightThroughIntersection(uint8_t leftSpeed, uint8_t rightSpeed) {
-  unsigned long startMs = millis();
-
-  speed_Upper_L = speed_Lower_L = leftSpeed;
-  speed_Upper_R = speed_Lower_R = rightSpeed;
-
-  while (millis() - startMs < LINE_INTERSECTION_MAX_MS) {
-    if (stopRequested()) {
-      robot.Stop();
-      return false;
-    }
-
-    uint8_t SL = digitalRead(LINE_LEFT_PIN);
-    uint8_t SM = digitalRead(LINE_MIDDLE_PIN);
-    uint8_t SR = digitalRead(LINE_RIGHT_PIN);
-
-    robot.Advance();
-
-    if (SL == LOW && SM == HIGH && SR == LOW) return true;
-    delay(LINE_TICK_MS);
-  }
-
-  return true;
 }
 
 // ── Basic 3-sensor line-follow (KS0560 lesson_6 pattern) ─────────────────────
@@ -665,9 +637,6 @@ void followLineWithTarget(int targetCount, uint8_t leftSpeed, uint8_t rightSpeed
           Serial.println("Target reached.");
           return;
         }
-        if (!driveStraightThroughIntersection(leftSpeed, rightSpeed)) return;
-        wasOnFullLine = false;
-        continue;
       }
     } else {
       wasOnFullLine = false;
