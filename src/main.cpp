@@ -69,6 +69,7 @@ int           numLines        = 0;
 bool          wasOnFullLine   = false;
 bool          stopAll         = false;
 unsigned long statusLedOffAtMs = 0;
+int           pendingEspKey   = -1;
 
 const uint8_t  STOP_KEY             = 64;
 
@@ -96,6 +97,8 @@ bool       stopRequested();
 bool       waitOrStop(uint16_t ms);
 
 void       logEsp32Messages();
+void       handleEsp32Line(String line);
+void       actionLog(const char* message);
 bool       connectEsp32Wifi();
 bool       runArmCommand(const char* command, const char* okResponse, const char* failResponse);
 bool       fetchRed();
@@ -139,6 +142,7 @@ bool       returnToCheckpoint();
 void       path1();
 void       path2();
 void       path3();
+void       runCommandKey(int key, const char* source);
 
 // ==========================================================================
 //  COLOR SENSOR (TCS3200)
@@ -191,6 +195,12 @@ void stopEverything() {
 
 bool stopRequested() {
   if (stopAll) return true;
+  logEsp32Messages();
+  if (pendingEspKey == STOP_KEY || pendingEspKey == 70) {
+    pendingEspKey = -1;
+    stopEverything();
+    return true;
+  }
   if (IRreceive.getKey() == STOP_KEY) {
     stopEverything();
     return true;
@@ -211,6 +221,19 @@ bool waitOrStop(uint16_t ms) {
 //  ESP32 WIFI + ROBOT-ARM COMMS
 // ==========================================================================
 
+void handleEsp32Line(String line) {
+  line.trim();
+  if (line.startsWith("IR_KEY")) {
+    pendingEspKey = line.substring(6).toInt();
+    Serial.print("ESP32 command key: ");
+    Serial.println(pendingEspKey);
+    return;
+  }
+
+  Serial.print("ESP32: ");
+  Serial.println(line);
+}
+
 void logEsp32Messages() {
   static String line;
 
@@ -218,15 +241,21 @@ void logEsp32Messages() {
     char c = espSerial.read();
     if (c == '\n') {
       line.trim();
-      if (line.length() > 0) {
-        Serial.print("ESP32: ");
-        Serial.println(line);
-      }
+      if (line.length() > 0) handleEsp32Line(line);
       line = "";
     } else if (c != '\r') {
       line += c;
     }
   }
+}
+
+void actionLog(const char* message) {
+  Serial.print("action: ");
+  Serial.println(message);
+  espSerial.listen();
+  espSerial.print("ACTION_LOG ");
+  espSerial.println(message);
+  espSerial.flush();
 }
 
 bool connectEsp32Wifi() {
@@ -1111,46 +1140,16 @@ void path3() {
   if (!returnToCheckpoint()) return;
 }
 
-// ==========================================================================
-//  ARDUINO ENTRY POINTS
-// ==========================================================================
+void runCommandKey(int key, const char* source) {
+  if (key == -1) return;
 
-void setup() {
-  pinMode(LINE_LEFT_PIN,   INPUT);
-  pinMode(LINE_MIDDLE_PIN, INPUT);
-  pinMode(LINE_RIGHT_PIN,  INPUT);
-  pinMode(CS_S2,  OUTPUT);
-  pinMode(CS_S3,  OUTPUT);
-  pinMode(CS_OUT, INPUT);
-  pinMode(ECHO_PIN, INPUT);
-  pinMode(TRIG_PIN, OUTPUT);
-  Serial.begin(9600);
-  espSerial.begin(9600);
-  robot.Init();
-  bool wifiConnected = connectEsp32Wifi();
-  robot.right_led(wifiConnected);
-  robot.left_led(wifiConnected);
-  if (wifiConnected) statusLedOffAtMs = millis() + 2000;
-  servo.attach(SERVO_PIN);
-  servo.write(gripperAngle);
-  Serial.println("Ready. Press IR to start.");
-}
+  char logMessage[40];
+  snprintf(logMessage, sizeof(logMessage), "%s key %d", source, key);
+  actionLog(logMessage);
 
-void loop() {
-  logEsp32Messages();
-
-  // init success
-  if (statusLedOffAtMs > 0 && millis() >= statusLedOffAtMs) {
-    robot.right_led(false);
-    robot.left_led(false);
-    statusLedOffAtMs = 0;
-  }
-
-  int key = IRreceive.getKey();
-
-  // A fresh command key (getKey returns -1 when idle) re-arms the robot after an
-  // emergency stop. The stop buttons are excluded so they never clear their own flag.
-  if (key != -1 && key != 70 && key != STOP_KEY) {
+  // A fresh command key re-arms the robot after an emergency stop. The stop
+  // buttons are excluded so they never clear their own flag.
+  if (key != 70 && key != STOP_KEY) {
     stopAll = false;
   }
 
@@ -1174,6 +1173,7 @@ void loop() {
       path3();
       robot.Stop();
       Serial.println("Done.");
+      actionLog("Done.");
       break;
     }
 
@@ -1217,6 +1217,12 @@ void loop() {
     case 74: // Test for ultrasonic sensor
       Serial.println("Ultrasonic reading started...");
       while (IRreceive.getKey() != 70) {
+        logEsp32Messages();
+        if (pendingEspKey == 70 || pendingEspKey == STOP_KEY) {
+          pendingEspKey = -1;
+          break;
+        }
+
         uint16_t dist = readUltrasonic();
         if (dist >= 999)
           Serial.println("Distance: out of range");
@@ -1236,5 +1242,49 @@ void loop() {
 
     default:
       break;
+  }
+}
+
+// ==========================================================================
+//  ARDUINO ENTRY POINTS
+// ==========================================================================
+
+void setup() {
+  pinMode(LINE_LEFT_PIN,   INPUT);
+  pinMode(LINE_MIDDLE_PIN, INPUT);
+  pinMode(LINE_RIGHT_PIN,  INPUT);
+  pinMode(CS_S2,  OUTPUT);
+  pinMode(CS_S3,  OUTPUT);
+  pinMode(CS_OUT, INPUT);
+  pinMode(ECHO_PIN, INPUT);
+  pinMode(TRIG_PIN, OUTPUT);
+  Serial.begin(9600);
+  espSerial.begin(9600);
+  robot.Init();
+  bool wifiConnected = connectEsp32Wifi();
+  robot.right_led(wifiConnected);
+  robot.left_led(wifiConnected);
+  if (wifiConnected) statusLedOffAtMs = millis() + 2000;
+  servo.attach(SERVO_PIN);
+  servo.write(gripperAngle);
+  Serial.println("Ready. Press IR to start.");
+}
+
+void loop() {
+  logEsp32Messages();
+
+  // init success
+  if (statusLedOffAtMs > 0 && millis() >= statusLedOffAtMs) {
+    robot.right_led(false);
+    robot.left_led(false);
+    statusLedOffAtMs = 0;
+  }
+
+  if (pendingEspKey >= 0) {
+    int key = pendingEspKey;
+    pendingEspKey = -1;
+    runCommandKey(key, "favoriot");
+  } else {
+    runCommandKey(IRreceive.getKey(), "ir");
   }
 }

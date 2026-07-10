@@ -41,11 +41,19 @@ bool favoriotConfigured() {
 void publishFavoriot(const char* key, const char* value) {
   if (!mqtt.connected()) return;
 
-  char payload[180];
-  snprintf(payload, sizeof(payload),
-           "{\"device_developer_id\":\"%s\",\"data\":{\"%s\":\"%s\"}}",
-           DEVICE_DEVELOPER_ID, key, value);
-  mqtt.publish(streamTopic().c_str(), payload);
+  String escaped(value);
+  escaped.replace("\\", "\\\\");
+  escaped.replace("\"", "\\\"");
+  escaped.replace("\r", " ");
+  escaped.replace("\n", " ");
+
+  String payload = "{\"device_developer_id\":\"" + String(DEVICE_DEVELOPER_ID) +
+                   "\",\"data\":{\"" + key + "\":\"" + escaped + "\"}}";
+  mqtt.publish(streamTopic().c_str(), payload.c_str());
+}
+
+void actionLog(const char* message) {
+  publishFavoriot("action", message);
 }
 
 void report(const char* message) {
@@ -96,6 +104,32 @@ bool runColor(const char* color) {
   return ok;
 }
 
+long readCommandKey(const String& message) {
+  String value = message;
+  value.trim();
+  if (value.startsWith("ir_key")) value = value.substring(6);
+
+  bool numeric = value.length() > 0;
+  for (unsigned int i = 0; i < value.length(); i++) {
+    if (!isDigit(value[i]) && !isSpace(value[i])) numeric = false;
+  }
+  if (numeric) return value.toInt();
+
+  const char* keys[] = {"\"ir\"", "\"key\"", "\"case\"", "\"command\"", "\"value\""};
+  for (unsigned int i = 0; i < sizeof(keys) / sizeof(keys[0]); i++) {
+    int keyPos = message.indexOf(keys[i]);
+    if (keyPos < 0) continue;
+
+    int colon = message.indexOf(':', keyPos);
+    if (colon < 0) continue;
+
+    int start = colon + 1;
+    while (start < (int)message.length() && !isDigit(message[start]) && message[start] != '-') start++;
+    if (start < (int)message.length()) return message.substring(start).toInt();
+  }
+  return -1;
+}
+
 bool fetchRed() {
   return runColor("red");
 }
@@ -115,6 +149,8 @@ void handleUnoCommand(const String& command) {
     report(fetchBlue() ? "ARM_BLUE_OK" : "ARM_BLUE_FAIL");
   } else if (command == "RUN_YELLOW") {
     report(fetchYellow() ? "ARM_YELLOW_OK" : "ARM_YELLOW_FAIL");
+  } else if (command.startsWith("ACTION_LOG ")) {
+    actionLog(command.substring(11).c_str());
   }
 }
 
@@ -123,7 +159,8 @@ void handleFavoriotMessage(char* topic, byte* payload, unsigned int length) {
   message.toLowerCase();
   Serial.printf("Favoriot %s: %s\n", topic, message.c_str());
 
-  if (message.indexOf("\"to\":\"mecanum\"") >= 0) {
+  if (message.indexOf("\"to\":\"mecanum\"") >= 0 &&
+      (message.indexOf("_ok") >= 0 || message.indexOf("_fail") >= 0)) {
     long id = readJsonLong(message, "\"id\"");
     if (id >= 0) {
       lastArmResultId = (uint32_t)id;
@@ -133,6 +170,14 @@ void handleFavoriotMessage(char* topic, byte* payload, unsigned int length) {
   }
 
   if (message.indexOf("\"to\":\"arm\"") >= 0) return;
+
+  long key = readCommandKey(message);
+  if (key >= 0) {
+    unoSerial.print("IR_KEY ");
+    unoSerial.println(key);
+    publishFavoriot("command", "sent");
+    return;
+  }
 
   if (message.indexOf("red") >= 0) queuedColor = "red";
   else if (message.indexOf("blue") >= 0) queuedColor = "blue";
@@ -191,7 +236,7 @@ void connectFavoriot() {
   report("MQTT_CONNECTING");
   if (mqtt.connect(clientId.c_str(), DEVICE_ACCESS_TOKEN, DEVICE_ACCESS_TOKEN)) {
     mqtt.subscribe(rpcTopic().c_str());
-    report("MQTT_CONNECTED 0");
+    report("Device conencted");
     String wifiMessage = "WIFI_CONNECTED " + WiFi.localIP().toString();
     report(wifiMessage.c_str());
   } else {
