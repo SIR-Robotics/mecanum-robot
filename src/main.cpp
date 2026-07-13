@@ -211,6 +211,7 @@ bool stopRequested() {
   logEsp32Messages();
   if (pendingEspKey == STOP_KEY || pendingEspKey == 70) {
     pendingEspKey = -1;
+    actionLog("force stop");
     stopEverything();
     return true;
   }
@@ -1234,10 +1235,11 @@ void runCommandKey(int key, const char* source) {
 
     case 13: { // challenge 3
       path1();
-      delay(1000);
+      if (stopRequested() || waitOrStop(1000)) break;
       path2();
-      delay(1000);
+      if (stopRequested() || waitOrStop(1000)) break;
       path3();
+      if (stopRequested()) break;
       robot.Stop();
       Serial.println("Done.");
       actionLog("Done.");

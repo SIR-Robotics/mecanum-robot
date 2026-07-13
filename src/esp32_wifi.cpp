@@ -23,6 +23,9 @@ uint32_t nextArmRequestId = 1;
 uint32_t lastArmResultId = 0;
 bool lastArmResultOk = false;
 String queuedColor;
+uint32_t activeChallengeId = 0;
+uint32_t forwardedCommandId = 0;
+long forwardedCommandKey = -1;
 
 void connectFavoriot();
 
@@ -54,6 +57,21 @@ void publishFavoriot(const char* key, const char* value) {
 
 void actionLog(const char* message) {
   publishFavoriot("action", message);
+}
+
+void publishFrontend(const char* type, uint32_t id, long key = -1) {
+  if (!mqtt.connected()) return;
+  char payload[96];
+  if (key >= 0) {
+    snprintf(payload, sizeof(payload),
+             "{\"to\":\"frontend\",\"type\":\"%s\",\"id\":%lu,\"key\":%ld}",
+             type, (unsigned long)id, key);
+  } else {
+    snprintf(payload, sizeof(payload),
+             "{\"to\":\"frontend\",\"type\":\"%s\",\"id\":%lu}",
+             type, (unsigned long)id);
+  }
+  mqtt.publish(rpcTopic().c_str(), payload);
 }
 
 void report(const char* message) {
@@ -150,7 +168,15 @@ void handleUnoCommand(const String& command) {
   } else if (command == "RUN_YELLOW") {
     report(fetchYellow() ? "ARM_YELLOW_OK" : "ARM_YELLOW_FAIL");
   } else if (command.startsWith("ACTION_LOG ")) {
-    actionLog(command.substring(11).c_str());
+    String message = command.substring(11);
+    actionLog(message.c_str());
+    if (message.startsWith("favoriot key ")) {
+      long key = message.substring(14).toInt();
+      if (key == forwardedCommandKey) publishFrontend("ack", forwardedCommandId, key);
+    } else if (message == "Done." && activeChallengeId != 0) {
+      publishFrontend("completed", activeChallengeId);
+      activeChallengeId = 0;
+    }
   }
 }
 
@@ -170,11 +196,19 @@ void handleFavoriotMessage(char* topic, byte* payload, unsigned int length) {
   }
 
   if (message.indexOf("\"to\":\"arm\"") >= 0) return;
+  if (message.indexOf("\"to\":\"frontend\"") >= 0) return;
 
   long key = readCommandKey(message);
   if (key >= 0) {
+    long id = readJsonLong(message, "\"id\"");
+    if (id < 0) return;
+    forwardedCommandId = (uint32_t)id;
+    forwardedCommandKey = key;
+    if (key == 13) activeChallengeId = forwardedCommandId;
     unoSerial.print("IR_KEY ");
-    unoSerial.println(key);
+    unoSerial.print(key);
+    unoSerial.print(' ');
+    unoSerial.println(id);
     publishFavoriot("command", "sent");
     return;
   }
