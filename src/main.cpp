@@ -35,8 +35,8 @@ const uint8_t  LINE_TURN_SPEED      = 32;   // spin speed for line-follow correc
 const uint8_t  SLOW_LEFT_SPEED      = 33;
 const uint8_t  SLOW_RIGHT_SPEED     = 33;
 const uint8_t  SLOW_LINE_TURN_SPEED = 31;
-const uint8_t  LINE_TICK_MS         = 6;   // follow-loop tick delay
-const uint8_t  SLOW_LINE_TICK_MS    = 4;   // tick delay for the slow-approach phase — tighter than LINE_TICK_MS to keep per-correction coverage small at low speed
+const uint8_t  LINE_TICK_MS         = 4;   // follow-loop tick delay
+const uint8_t  SLOW_LINE_TICK_MS    = 2;   // tick delay for the slow-approach phase — tighter than LINE_TICK_MS to keep per-correction coverage small at low speed
 const uint16_t OBSTACLE_DISTANCE_CM = 7;
 const uint16_t APPROACH_DISTANCE_CM = 20;
 const uint16_t ULTRASONIC_SAMPLE_MS = 50;
@@ -69,6 +69,12 @@ const uint16_t SEARCH_SWEEP_MAX_MS     = 1500;  // cap on sweep width
 // this long without reacquiring it, flip direction instead of committing to
 // that turn indefinitely — tune empirically.
 const uint16_t LOST_LINE_FLIP_MS = 400;
+
+// alignOnCrossLine: after stopping on a crossing marker, momentum only ever
+// carries the robot forward past it, so back up gently until all 3 sensors
+// read it solidly again before dropping the object.
+const uint8_t  ALIGN_CONFIRM_TICKS = 5;   // consecutive all-on-line ticks required
+const uint16_t ALIGN_TIMEOUT_MS    = 1000;
 
 bool isGripperOpen = true; // true = open, false = closed
 uint8_t gripperAngle = GRIPPER_OPEN_ANGLE;
@@ -146,6 +152,7 @@ void       followLineWithDistance();
 void       moveSlowlyToObject();
 
 bool       searchAndCenterLine(uint16_t timeoutMs = 1500, int8_t initialLastSeenSide = 0);
+bool       alignOnCrossLine(uint16_t timeoutMs = ALIGN_TIMEOUT_MS);
 
 void       openGripper(bool state);
 int        gripAndIdentifyColor(bool gOpen);
@@ -992,6 +999,48 @@ bool searchAndCenterLine(uint16_t timeoutMs, int8_t initialLastSeenSide) {
   }
 }
 
+// After stopping on a crossing marker (all 3 sensors briefly HIGH), motor
+// coast only ever carries the robot forward past it — never short of it,
+// since the stop is triggered by first detecting the crossing. So back up
+// in small steps until all 3 sensors read the line solidly again, confirming
+// for a few ticks to debounce noise, squaring the robot up before a drop.
+bool alignOnCrossLine(uint16_t timeoutMs) {
+  Serial.println("Aligning on cross line...");
+
+  uint8_t confirmedTicks = 0;
+  unsigned long startMs = millis();
+
+  while (millis() - startMs < timeoutMs) {
+    if (stopRequested()) {
+      robot.Stop();
+      return false;
+    }
+
+    bool onCrossLine = digitalRead(LINE_LEFT_PIN)   == HIGH &&
+                       digitalRead(LINE_MIDDLE_PIN) == HIGH &&
+                       digitalRead(LINE_RIGHT_PIN)  == HIGH;
+
+    if (onCrossLine) {
+      robot.Stop();
+      if (++confirmedTicks >= ALIGN_CONFIRM_TICKS) {
+        Serial.println("Aligned on cross line.");
+        return true;
+      }
+    } else {
+      confirmedTicks = 0;
+      speed_Upper_L = speed_Lower_L = SLOW_LEFT_SPEED;
+      speed_Upper_R = speed_Lower_R = SLOW_RIGHT_SPEED;
+      robot.Back();
+    }
+
+    delay(SLOW_LINE_TICK_MS);
+  }
+
+  robot.Stop();
+  Serial.println("Align timeout — cross line not reacquired.");
+  return false;
+}
+
 // ==========================================================================
 //  GRIPPER
 // ==========================================================================
@@ -1087,6 +1136,7 @@ void path1() {
   delay(1000);
   moveSlowly(2);
   delay(1000);
+  alignOnCrossLine();
   openGripper(isGripperOpen);
   delay(5000);
   isGripperOpen = !isGripperOpen;
@@ -1149,6 +1199,7 @@ void path2() {
   delay(1000);
   moveSlowly(3);
   delay(1000);
+  alignOnCrossLine();
   openGripper(isGripperOpen);
   delay(5000);
   isGripperOpen = !isGripperOpen;
@@ -1201,6 +1252,7 @@ void path3() {
   delay(1000);
   moveSlowly(2);
   delay(1000);
+  alignOnCrossLine();
   openGripper(isGripperOpen);
   delay(5000);
   isGripperOpen = !isGripperOpen;
@@ -1222,16 +1274,16 @@ void runCommandKey(int key, const char* source) {
   }
 
   switch (key) {
-    case 22: // challenge 1
-      returnToCheckpoint();
-      if (!searchAndCenterLine()) return;
-      followLineWithTarget(3);
-      break;
+    // case 22: // challenge 1
+    //   returnToCheckpoint();
+    //   if (!searchAndCenterLine()) return;
+    //   followLineWithTarget(3);
+    //   break;
 
-    case 25: // challenge 2
-      reverseShort(300);
-      if (!searchAndCenterLine()) return;
-      break;
+    // case 25: // challenge 2
+    //   reverseShort(300);
+    //   if (!searchAndCenterLine()) return;
+    //   break;
 
     case 13: { // challenge 3
       path1();
@@ -1246,72 +1298,72 @@ void runCommandKey(int key, const char* source) {
       break;
     }
 
-    case 68: // left button
-      if (!returnToCheckpoint()) return;
-      if (!searchAndCenterLine()) return;
-      delay(1000);
-      followLineWithTarget(2);
-      strafeLeft(2);
-      if (!searchAndCenterLine()) return;
-      followLineWithDistance();
-      break;
+    // case 68: // left button
+    //   if (!returnToCheckpoint()) return;
+    //   if (!searchAndCenterLine()) return;
+    //   delay(1000);
+    //   followLineWithTarget(2);
+    //   strafeLeft(2);
+    //   if (!searchAndCenterLine()) return;
+    //   followLineWithDistance();
+    //   break;
 
-    case 70: // front button / stop everything
-      stopEverything();
-      break;
+    // case 70: // front button / stop everything
+    //   stopEverything();
+    //   break;
 
-    case 12: // number 4
-      path2();
-      break;
+    // case 12: // number 4
+    //   path2();
+    //   break;
 
-    case 24: // button 5
-      path3();
-      break;
+    // case 24: // button 5
+    //   path3();
+    //   break;
 
-    case 94:
-      returnToCheckpoint();
-      break;
+    // case 94:
+    //   returnToCheckpoint();
+    //   break;
 
-    case 67: // right button
-      rotate90();
-      break;
+    // case 67: // right button
+    //   rotate90();
+    //   break;
 
-    case 82: { // Button to test out code - gripper
-      static bool gripperOpen = false;
-      gripperOpen = !gripperOpen;
-      openGripper(gripperOpen);
-      break;
-    }
+    // case 82: { // Button to test out code - gripper
+    //   static bool gripperOpen = false;
+    //   gripperOpen = !gripperOpen;
+    //   openGripper(gripperOpen);
+    //   break;
+    // }
 
-    case 74: // Test for ultrasonic sensor
-      Serial.println("Ultrasonic reading started...");
-      while (IRreceive.getKey() != 70) {
-        logEsp32Messages();
-        if (pendingEspKey == 70 || pendingEspKey == STOP_KEY) {
-          pendingEspKey = -1;
-          break;
-        }
+    // case 74: // Test for ultrasonic sensor
+    //   Serial.println("Ultrasonic reading started...");
+    //   while (IRreceive.getKey() != 70) {
+    //     logEsp32Messages();
+    //     if (pendingEspKey == 70 || pendingEspKey == STOP_KEY) {
+    //       pendingEspKey = -1;
+    //       break;
+    //     }
 
-        uint16_t dist = readUltrasonic();
-        if (dist >= 999)
-          Serial.println("Distance: out of range");
-        else {
-          Serial.print("Distance: ");
-          Serial.print(dist);
-          Serial.println(" cm");
-        }
-        delay(250);
-      }
-      Serial.println("Ultrasonic stopped.");
-      break;
+    //     uint16_t dist = readUltrasonic();
+    //     if (dist >= 999)
+    //       Serial.println("Distance: out of range");
+    //     else {
+    //       Serial.print("Distance: ");
+    //       Serial.print(dist);
+    //       Serial.println(" cm");
+    //     }
+    //     delay(250);
+    //   }
+    //   Serial.println("Ultrasonic stopped.");
+    //   break;
 
-    case 28: // test run robot
-      fetchBlue();
-      break;
+    // case 28: // test run robot
+    //   fetchBlue();
+    //   break;
 
-    case 90: // number 6 — drive forward at the production per-wheel speeds (see WHEEL_SPEED_* constants)
-      moveForwardWheelSpeeds(WHEEL_SPEED_UPPER_L, WHEEL_SPEED_LOWER_L, WHEEL_SPEED_UPPER_R, WHEEL_SPEED_LOWER_R);
-      break;
+    // case 90: // number 6 — drive forward at the production per-wheel speeds (see WHEEL_SPEED_* constants)
+    //   moveForwardWheelSpeeds(WHEEL_SPEED_UPPER_L, WHEEL_SPEED_LOWER_L, WHEEL_SPEED_UPPER_R, WHEEL_SPEED_LOWER_R);
+    //   break;
 
     default:
       break;
