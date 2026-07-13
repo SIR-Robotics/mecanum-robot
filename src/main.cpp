@@ -30,21 +30,28 @@ const uint8_t TRIG_PIN = 12;
 // Servo Pin
 const uint8_t SERVO_PIN = 9;
 
-const uint8_t  TURNING_SPEED        = 50;
-const uint8_t  LEFT_SPEED           = 45;   // advance speed, left side
-const uint8_t  RIGHT_SPEED          = 45;   // advance speed, right side (trim for asymmetry)
-const uint8_t  LINE_TURN_SPEED      = 25;   // spin speed for line-follow corrections
-const uint8_t  SLOW_LEFT_SPEED      = 20;
-const uint8_t  SLOW_RIGHT_SPEED     = 20;
-const uint8_t  SLOW_LINE_TURN_SPEED = 28;
-const uint8_t  LINE_TICK_MS         = 30;   // follow-loop tick delay
+const uint8_t  TURNING_SPEED        = 54;
+const uint8_t  LINE_TURN_SPEED      = 32;   // spin speed for line-follow corrections
+const uint8_t  SLOW_LEFT_SPEED      = 33;
+const uint8_t  SLOW_RIGHT_SPEED     = 33;
+const uint8_t  SLOW_LINE_TURN_SPEED = 31;
+const uint8_t  LINE_TICK_MS         = 6;   // follow-loop tick delay
+const uint8_t  SLOW_LINE_TICK_MS    = 4;   // tick delay for the slow-approach phase — tighter than LINE_TICK_MS to keep per-correction coverage small at low speed
 const uint16_t OBSTACLE_DISTANCE_CM = 7;
 const uint16_t APPROACH_DISTANCE_CM = 20;
 const uint16_t ULTRASONIC_SAMPLE_MS = 50;
 const uint32_t ULTRASONIC_TIMEOUT_US = 12000;
 const uint8_t  ULTRASONIC_CONFIRM_READS = 3;
 const uint8_t  ULTRASONIC_STOP_HYSTERESIS_CM = 2;
-const uint8_t  LINE_SEARCH_SPEED    = 35;   // aggressive turning when line is lost
+const uint8_t  LINE_SEARCH_SPEED    = 40;   // aggressive turning when line is lost
+
+// Per-wheel advance speeds — calibrated via the IR remote's wheel-test button
+// (case 90, moveForwardWheelSpeeds) to compensate for motor-to-motor variance.
+// This is now the single source of truth for normal-speed forward driving.
+const uint8_t  WHEEL_SPEED_UPPER_L   = 42;
+const uint8_t  WHEEL_SPEED_LOWER_L   = 44;
+const uint8_t  WHEEL_SPEED_UPPER_R   = 45;
+const uint8_t  WHEEL_SPEED_LOWER_R   = 45;
 const uint8_t  GRIPPER_OPEN_ANGLE   = 2;
 const uint8_t  GRIPPER_CLOSE_ANGLE  = 180;
 const uint8_t  GRIPPER_STEP_DELAY_MS = 10;
@@ -57,6 +64,11 @@ const uint16_t DRIFT_CORRECT_MS = 120;  // drift_left pulse after the 180° spin
 const uint16_t SEARCH_SWEEP_INITIAL_MS = 300;   // first sweep half-width
 const uint16_t SEARCH_SWEEP_GROWTH_MS  = 300;   // how much wider each sweep gets
 const uint16_t SEARCH_SWEEP_MAX_MS     = 1500;  // cap on sweep width
+
+// If steerAlongLine loses the line on all 3 sensors and keeps spinning one way
+// this long without reacquiring it, flip direction instead of committing to
+// that turn indefinitely — tune empirically.
+const uint16_t LOST_LINE_FLIP_MS = 400;
 
 bool isGripperOpen = true; // true = open, false = closed
 uint8_t gripperAngle = GRIPPER_OPEN_ANGLE;
@@ -109,6 +121,7 @@ void       sendArmCommand(int colorRes);
 void       turnRight90();
 void       brakePulse(void (mecanumCar::*counterMove)());
 bool       moveShort(uint16_t durationMs = 300);
+bool       moveForwardWheelSpeeds(uint8_t upperL, uint8_t lowerL, uint8_t upperR, uint8_t lowerR, uint16_t durationMs = 2000);
 bool       reverseShort(uint16_t durationMs = 300);
 bool       robotReverse(uint16_t timeoutMs = 2500, uint16_t reverseBlindMs = REVERSE_BLIND_MS);
 void       strafeLeft(int targetCount);
@@ -118,9 +131,9 @@ bool       rotate90Left(uint8_t turnSpeed = TURNING_SPEED, uint16_t timeoutMs = 
 bool       rotate180(uint8_t turnSpeed = TURNING_SPEED, uint16_t timeoutMs = 5000);
 
 void       steerAlongLine(uint8_t SL, uint8_t SM, uint8_t SR,
-                          uint8_t leftSpeed, uint8_t rightSpeed, uint8_t turnSpeed,
+                          uint8_t upperL, uint8_t lowerL, uint8_t upperR, uint8_t lowerR, uint8_t turnSpeed,
                           int8_t &lastSeenSide);
-void       followLineWithTarget(int targetCount, uint8_t leftSpeed, uint8_t rightSpeed, uint8_t turnSpeed);
+void       followLineWithTarget(int targetCount, uint8_t upperL, uint8_t lowerL, uint8_t upperR, uint8_t lowerR, uint8_t turnSpeed, uint8_t tickMs = LINE_TICK_MS);
 void       followLineWithTarget(int targetCount);
 bool       followLineForMs(uint16_t ms);
 void       moveSlowly(int targetCount);
@@ -128,7 +141,7 @@ void       moveSlowly(int targetCount);
 uint16_t   readUltrasonic();
 uint16_t   readUltrasonicMedian();
 
-bool       followLineWithDistance(uint8_t leftSpeed, uint8_t rightSpeed, uint8_t turnSpeed, uint16_t stopDistanceCm);
+bool       followLineWithDistance(uint8_t upperL, uint8_t lowerL, uint8_t upperR, uint8_t lowerR, uint8_t turnSpeed, uint16_t stopDistanceCm, uint8_t tickMs = LINE_TICK_MS);
 void       followLineWithDistance();
 void       moveSlowlyToObject();
 
@@ -380,8 +393,34 @@ void turnRight90() {
 bool moveShort(uint16_t durationMs) {
   Serial.println("Moving short distance...");
 
-  speed_Upper_L = speed_Lower_L = LEFT_SPEED;
-  speed_Upper_R = speed_Lower_R = RIGHT_SPEED;
+  speed_Upper_L = WHEEL_SPEED_UPPER_L;
+  speed_Lower_L = WHEEL_SPEED_LOWER_L;
+  speed_Upper_R = WHEEL_SPEED_UPPER_R;
+  speed_Lower_R = WHEEL_SPEED_LOWER_R;
+  robot.Advance();
+
+  if (waitOrStop(durationMs)) {
+    robot.Stop();
+    return false;
+  }
+
+  robot.Stop();
+  return true;
+}
+
+// Drive forward with explicit per-wheel speeds, bypassing the WHEEL_SPEED_*
+// constants — lets a caller (e.g. the remote's wheel-test button) try out
+// values on the fly without re-flashing.
+bool moveForwardWheelSpeeds(uint8_t upperL, uint8_t lowerL, uint8_t upperR, uint8_t lowerR, uint16_t durationMs) {
+  Serial.print("Wheel speeds — UL:"); Serial.print(upperL);
+  Serial.print(" LL:"); Serial.print(lowerL);
+  Serial.print(" UR:"); Serial.print(upperR);
+  Serial.print(" LR:"); Serial.println(lowerR);
+
+  speed_Upper_L = upperL;
+  speed_Lower_L = lowerL;
+  speed_Upper_R = upperR;
+  speed_Lower_R = lowerR;
   robot.Advance();
 
   if (waitOrStop(durationMs)) {
@@ -396,8 +435,10 @@ bool moveShort(uint16_t durationMs) {
 bool reverseShort(uint16_t durationMs) {
   Serial.println("Reversing short distance...");
 
-  speed_Upper_L = speed_Lower_L = LEFT_SPEED;
-  speed_Upper_R = speed_Lower_R = RIGHT_SPEED;
+  speed_Upper_L = WHEEL_SPEED_UPPER_L;
+  speed_Lower_L = WHEEL_SPEED_LOWER_L;
+  speed_Upper_R = WHEEL_SPEED_UPPER_R;
+  speed_Lower_R = WHEEL_SPEED_LOWER_R;
   robot.Back();
 
   if (waitOrStop(durationMs)) {
@@ -414,8 +455,10 @@ bool robotReverse(uint16_t timeoutMs, uint16_t reverseBlindMs) {
                           digitalRead(LINE_MIDDLE_PIN) == HIGH &&
                           digitalRead(LINE_RIGHT_PIN) == HIGH);
 
-  speed_Upper_L = speed_Lower_L = LEFT_SPEED;
-  speed_Upper_R = speed_Lower_R = RIGHT_SPEED + 2; // slight trim for asymmetry
+  speed_Upper_L = WHEEL_SPEED_UPPER_L;
+  speed_Lower_L = WHEEL_SPEED_LOWER_L;
+  speed_Upper_R = WHEEL_SPEED_UPPER_R;
+  speed_Lower_R = WHEEL_SPEED_LOWER_R;
   robot.Back();
 
   if (waitOrStop(reverseBlindMs)) {
@@ -609,29 +652,51 @@ bool rotate180(uint8_t turnSpeed, uint16_t timeoutMs) {
 // keep turning toward whichever side saw it last. `lastSeenSide` is updated in
 // place (+1 = line last seen on right, -1 = left).
 void steerAlongLine(uint8_t SL, uint8_t SM, uint8_t SR,
-                    uint8_t leftSpeed, uint8_t rightSpeed, uint8_t turnSpeed,
+                    uint8_t upperL, uint8_t lowerL, uint8_t upperR, uint8_t lowerR, uint8_t turnSpeed,
                     int8_t &lastSeenSide) {
+  // Tracks how long we've been spinning one way with the line fully lost —
+  // static because this only makes sense as a running timer across
+  // consecutive ticks of the same follow-loop, not per-call state.
+  static unsigned long lostSinceMs = 0;
+  static int8_t lostSpinDir = 0;
+
   if (SM == HIGH || (SL == HIGH && SR == HIGH)) {
-    speed_Upper_L = speed_Lower_L = leftSpeed;
-    speed_Upper_R = speed_Lower_R = rightSpeed;
+    lostSinceMs = 0;
+    speed_Upper_L = upperL;
+    speed_Lower_L = lowerL;
+    speed_Upper_R = upperR;
+    speed_Lower_R = lowerR;
     robot.Advance();
   } else if (SL == LOW && SR == HIGH) {
+    lostSinceMs = 0;
     lastSeenSide = +1;
     speed_Upper_L = speed_Lower_L = speed_Upper_R = speed_Lower_R = turnSpeed;
     robot.Turn_Right();
   } else if (SR == LOW && SL == HIGH) {
+    lostSinceMs = 0;
     lastSeenSide = -1;
     speed_Upper_L = speed_Lower_L = speed_Upper_R = speed_Lower_R = turnSpeed;
     robot.Turn_Left();
   } else {
+    // Line fully lost. Spin toward lastSeenSide, but if that doesn't
+    // reacquire it within LOST_LINE_FLIP_MS, flip direction instead of
+    // committing to one turn indefinitely (e.g. a swerve that overshoots
+    // past the line shouldn't just spin left forever).
+    if (lostSinceMs == 0) {
+      lostSinceMs = millis();
+      lostSpinDir = (lastSeenSide < 0) ? -1 : +1;
+    } else if (millis() - lostSinceMs >= LOST_LINE_FLIP_MS) {
+      lostSinceMs = millis();
+      lostSpinDir = -lostSpinDir;
+    }
     speed_Upper_L = speed_Lower_L = speed_Upper_R = speed_Lower_R = turnSpeed;
-    (lastSeenSide < 0) ? robot.Turn_Left() : robot.Turn_Right();
+    (lostSpinDir < 0) ? robot.Turn_Left() : robot.Turn_Right();
   }
 }
 
 // ── Basic 3-sensor line-follow (KS0560 lesson_6 pattern) ─────────────────────
 // Follow the line, counting all-black crossings; stop when count hits targetCount.
-void followLineWithTarget(int targetCount, uint8_t leftSpeed, uint8_t rightSpeed, uint8_t turnSpeed) {
+void followLineWithTarget(int targetCount, uint8_t upperL, uint8_t lowerL, uint8_t upperR, uint8_t lowerR, uint8_t turnSpeed, uint8_t tickMs) {
   numLines      = 0;
   wasOnFullLine = false;
 
@@ -671,13 +736,13 @@ void followLineWithTarget(int targetCount, uint8_t leftSpeed, uint8_t rightSpeed
       wasOnFullLine = false;
     }
 
-    steerAlongLine(SL, SM, SR, leftSpeed, rightSpeed, turnSpeed, lastSeenSide);
-    delay(LINE_TICK_MS);
+    steerAlongLine(SL, SM, SR, upperL, lowerL, upperR, lowerR, turnSpeed, lastSeenSide);
+    delay(tickMs);
   }
 }
 
 void followLineWithTarget(int targetCount) {
-  followLineWithTarget(targetCount, LEFT_SPEED, RIGHT_SPEED, LINE_TURN_SPEED);
+  followLineWithTarget(targetCount, WHEEL_SPEED_UPPER_L, WHEEL_SPEED_LOWER_L, WHEEL_SPEED_UPPER_R, WHEEL_SPEED_LOWER_R, LINE_TURN_SPEED, LINE_TICK_MS);
 }
 
 bool followLineForMs(uint16_t ms) {
@@ -696,7 +761,7 @@ bool followLineForMs(uint16_t ms) {
     uint8_t SM = digitalRead(LINE_MIDDLE_PIN);
     uint8_t SR = digitalRead(LINE_RIGHT_PIN);
 
-    steerAlongLine(SL, SM, SR, LEFT_SPEED, RIGHT_SPEED, LINE_TURN_SPEED, lastSeenSide);
+    steerAlongLine(SL, SM, SR, WHEEL_SPEED_UPPER_L, WHEEL_SPEED_LOWER_L, WHEEL_SPEED_UPPER_R, WHEEL_SPEED_LOWER_R, LINE_TURN_SPEED, lastSeenSide);
     delay(LINE_TICK_MS);
   }
 
@@ -705,7 +770,7 @@ bool followLineForMs(uint16_t ms) {
 }
 
 void moveSlowly(int targetCount) {
-  followLineWithTarget(targetCount, SLOW_LEFT_SPEED, SLOW_RIGHT_SPEED, SLOW_LINE_TURN_SPEED);
+  followLineWithTarget(targetCount, SLOW_LEFT_SPEED, SLOW_LEFT_SPEED, SLOW_RIGHT_SPEED, SLOW_RIGHT_SPEED, SLOW_LINE_TURN_SPEED, SLOW_LINE_TICK_MS);
 }
 
 // ==========================================================================
@@ -741,7 +806,7 @@ uint16_t readUltrasonicMedian() {
 //  LINE FOLLOWING WITH OBSTACLE STOP
 // ==========================================================================
 
-bool followLineWithDistance(uint8_t leftSpeed, uint8_t rightSpeed, uint8_t turnSpeed, uint16_t stopDistanceCm) {
+bool followLineWithDistance(uint8_t upperL, uint8_t lowerL, uint8_t upperR, uint8_t lowerR, uint8_t turnSpeed, uint16_t stopDistanceCm, uint8_t tickMs) {
   Serial.println("Following line with distance check...");
 
   unsigned long lastIRCheckMs      = 0;
@@ -792,22 +857,22 @@ bool followLineWithDistance(uint8_t leftSpeed, uint8_t rightSpeed, uint8_t turnS
     uint8_t SM = digitalRead(LINE_MIDDLE_PIN);
     uint8_t SR = digitalRead(LINE_RIGHT_PIN);
 
-    steerAlongLine(SL, SM, SR, leftSpeed, rightSpeed, turnSpeed, lastSeenSide);
-    delay(LINE_TICK_MS);
+    steerAlongLine(SL, SM, SR, upperL, lowerL, upperR, lowerR, turnSpeed, lastSeenSide);
+    delay(tickMs);
   }
 }
 
 // Same tracking logic as followLineWithTarget; runs until an obstacle is
 // detected within OBSTACLE_DISTANCE_CM or STOP is pressed.
 void followLineWithDistance() {
-  if (followLineWithDistance(LEFT_SPEED, RIGHT_SPEED, LINE_TURN_SPEED, APPROACH_DISTANCE_CM)) {
+  if (followLineWithDistance(WHEEL_SPEED_UPPER_L, WHEEL_SPEED_LOWER_L, WHEEL_SPEED_UPPER_R, WHEEL_SPEED_LOWER_R, LINE_TURN_SPEED, APPROACH_DISTANCE_CM, LINE_TICK_MS)) {
     delay(1000);
     moveSlowlyToObject();
   }
 }
 
 void moveSlowlyToObject() {
-  followLineWithDistance(SLOW_LEFT_SPEED, SLOW_RIGHT_SPEED, SLOW_LINE_TURN_SPEED, OBSTACLE_DISTANCE_CM);
+  followLineWithDistance(SLOW_LEFT_SPEED, SLOW_LEFT_SPEED, SLOW_RIGHT_SPEED, SLOW_RIGHT_SPEED, SLOW_LINE_TURN_SPEED, OBSTACLE_DISTANCE_CM, SLOW_LINE_TICK_MS);
 }
 
 // ==========================================================================
@@ -878,8 +943,10 @@ bool searchAndCenterLine(uint16_t timeoutMs, int8_t initialLastSeenSide) {
       } else {
         // L && R (crossing / thick line), or middle-only-unstable:
         // advance slowly until readings normalize
-        speed_Upper_L = speed_Lower_L = LEFT_SPEED;
-        speed_Upper_R = speed_Lower_R = RIGHT_SPEED;
+        speed_Upper_L = WHEEL_SPEED_UPPER_L;
+        speed_Lower_L = WHEEL_SPEED_LOWER_L;
+        speed_Upper_R = WHEEL_SPEED_UPPER_R;
+        speed_Lower_R = WHEEL_SPEED_LOWER_R;
         robot.Advance();
       }
 
@@ -1238,6 +1305,10 @@ void runCommandKey(int key, const char* source) {
 
     case 28: // test run robot
       fetchBlue();
+      break;
+
+    case 90: // number 6 — drive forward at the production per-wheel speeds (see WHEEL_SPEED_* constants)
+      moveForwardWheelSpeeds(WHEEL_SPEED_UPPER_L, WHEEL_SPEED_LOWER_L, WHEEL_SPEED_UPPER_R, WHEEL_SPEED_LOWER_R);
       break;
 
     default:
