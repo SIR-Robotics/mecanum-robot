@@ -1334,9 +1334,9 @@ void runCommandKey(int key, const char* source) {
     //   followLineWithDistance();
     //   break;
 
-    // case 70: // front button / stop everything
-    //   stopEverything();
-    //   break;
+    case 70: // front button / stop everything
+      stopEverything();
+      break;
 
     // case 12: // number 4
     //   path2();
