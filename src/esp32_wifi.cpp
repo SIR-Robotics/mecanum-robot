@@ -315,9 +315,9 @@ void loop() {
     // String message = "WIFI_CONNECTED " + WiFi.localIP().toString();
     // report(message.c_str());
 
-    char mqttMessage[32];
-    snprintf(mqttMessage, sizeof(mqttMessage), "MQTT_%s %d",
-             mqtt.connected() ? "CONNECTED" : "DISCONNECTED", mqtt.state());
-    report(mqttMessage);
+    // char mqttMessage[32];
+    // snprintf(mqttMessage, sizeof(mqttMessage), "MQTT_%s %d",
+    //          mqtt.connected() ? "CONNECTED" : "DISCONNECTED", mqtt.state());
+    // report(mqttMessage);
   }
 }
