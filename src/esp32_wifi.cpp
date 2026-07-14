@@ -18,6 +18,8 @@ PubSubClient mqtt(wifiClient);
 const uint8_t UNO_RX_PIN = 16;
 const uint8_t UNO_TX_PIN = 17;
 const uint32_t UNO_BAUD = 9600;
+const char* ONLINE_PRESENCE = "{\"to\":\"frontend\",\"type\":\"presence\",\"online\":true}";
+const char* OFFLINE_PRESENCE = "{\"to\":\"frontend\",\"type\":\"presence\",\"online\":false}";
 
 uint32_t nextArmRequestId = 1;
 uint32_t lastArmResultId = 0;
@@ -267,12 +269,15 @@ void connectFavoriot() {
   lastAttemptMs = millis();
 
   String clientId = "esp32-" + String((uint32_t)ESP.getEfuseMac(), HEX);
+  String topic = rpcTopic();
   report("MQTT_CONNECTING");
-  if (mqtt.connect(clientId.c_str(), DEVICE_ACCESS_TOKEN, DEVICE_ACCESS_TOKEN)) {
-    mqtt.subscribe(rpcTopic().c_str());
-    report("Device conencted");
-    String wifiMessage = "WIFI_CONNECTED " + WiFi.localIP().toString();
-    report(wifiMessage.c_str());
+  if (mqtt.connect(clientId.c_str(), DEVICE_ACCESS_TOKEN, DEVICE_ACCESS_TOKEN,
+                   topic.c_str(), 0, true, OFFLINE_PRESENCE)) {
+    mqtt.subscribe(topic.c_str());
+    mqtt.publish(topic.c_str(), ONLINE_PRESENCE, true);
+    Serial.println("Device connected");
+    Serial.print("WIFI_CONNECTED ");
+    Serial.println(WiFi.localIP());
   } else {
     char message[24];
     snprintf(message, sizeof(message), "MQTT_FAILED %d", mqtt.state());
@@ -291,14 +296,11 @@ void setup() {
 }
 
 void loop() {
-  static unsigned long lastReportMs = 0;
-
   readUnoCommands();
 
   if (WiFi.status() != WL_CONNECTED) {
     report("WIFI_DISCONNECTED");
     connectWifi();
-    lastReportMs = millis();
   }
 
   connectFavoriot();
@@ -310,14 +312,4 @@ void loop() {
     runColor(color.c_str());
   }
 
-  if (millis() - lastReportMs >= 5000) {
-    lastReportMs = millis();
-    // String message = "WIFI_CONNECTED " + WiFi.localIP().toString();
-    // report(message.c_str());
-
-    // char mqttMessage[32];
-    // snprintf(mqttMessage, sizeof(mqttMessage), "MQTT_%s %d",
-    //          mqtt.connected() ? "CONNECTED" : "DISCONNECTED", mqtt.state());
-    // report(mqttMessage);
-  }
 }
