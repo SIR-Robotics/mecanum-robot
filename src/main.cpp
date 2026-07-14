@@ -37,9 +37,19 @@ const uint8_t  LINE_TURN_SPEED      = 32;   // spin speed for the lost-line reco
 // onto the line (heading untouched) plus a small yaw to fix actual heading
 // error — it never pivots in place, so forward speed never drops to zero.
 // Error is -2..+2 (see lineError). Tune on hardware.
-const uint8_t  LINE_STRAFE_GAIN     = 10;  // strafe PWM per unit of line error — the main correction authority
-const uint8_t  LINE_YAW_GAIN        = 2;   // yaw PWM per unit of line error — keep small; this is what used to cause the zigzag
+const uint8_t  LINE_STRAFE_GAIN     = 6;  // strafe PWM per unit of line error — the main correction authority
+const uint8_t  LINE_YAW_GAIN        = 1;   // yaw PWM per unit of line error — keep small; this is what used to cause the zigzag. Integer gain on a -2..+2 error: 0 would remove heading correction entirely, so 1 is the lowest usable step.
 const uint8_t  LINE_CORRECT_SLOWDOWN = 6;  // forward PWM shed per unit of error; sized so vy stays well above zero at |error| = 2
+
+// Slow-approach versions of the above — vx/w are absolute PWM, but vy (forward
+// speed) is lower here (SLOW_LEFT/RIGHT_SPEED vs WHEEL_SPEED_*), so the same
+// gains would be proportionally stronger relative to forward speed. Scaled by
+// ~0.75 (33/44, the slow/normal speed ratio) to keep correction feel consistent
+// between tiers. Yaw can't scale below 1 without disabling heading correction
+// entirely (same integer-math floor as LINE_YAW_GAIN), so it stays equal.
+const uint8_t  SLOW_LINE_STRAFE_GAIN     = 4;
+const uint8_t  SLOW_LINE_YAW_GAIN        = 1;
+const uint8_t  SLOW_LINE_CORRECT_SLOWDOWN = 4;
 const uint8_t  SLOW_LEFT_SPEED      = 33;
 const uint8_t  SLOW_RIGHT_SPEED     = 33;
 const uint8_t  SLOW_LINE_TURN_SPEED = 31;
@@ -148,8 +158,9 @@ bool       rotate180(uint8_t turnSpeed = TURNING_SPEED, uint16_t timeoutMs = 500
 
 void       steerAlongLine(uint8_t SL, uint8_t SM, uint8_t SR,
                           uint8_t upperL, uint8_t lowerL, uint8_t upperR, uint8_t lowerR, uint8_t turnSpeed,
+                          uint8_t strafeGain, uint8_t yawGain, uint8_t slowdownGain,
                           int8_t &lastSeenSide);
-void       followLineWithTarget(int targetCount, uint8_t upperL, uint8_t lowerL, uint8_t upperR, uint8_t lowerR, uint8_t turnSpeed, uint8_t tickMs = LINE_TICK_MS);
+void       followLineWithTarget(int targetCount, uint8_t upperL, uint8_t lowerL, uint8_t upperR, uint8_t lowerR, uint8_t turnSpeed, uint8_t tickMs = LINE_TICK_MS, uint8_t strafeGain = LINE_STRAFE_GAIN, uint8_t yawGain = LINE_YAW_GAIN, uint8_t slowdownGain = LINE_CORRECT_SLOWDOWN);
 void       followLineWithTarget(int targetCount);
 bool       followLineForMs(uint16_t ms);
 void       moveSlowly(int targetCount);
@@ -157,7 +168,7 @@ void       moveSlowly(int targetCount);
 uint16_t   readUltrasonic();
 uint16_t   readUltrasonicMedian();
 
-bool       followLineWithDistance(uint8_t upperL, uint8_t lowerL, uint8_t upperR, uint8_t lowerR, uint8_t turnSpeed, uint16_t stopDistanceCm, uint8_t tickMs = LINE_TICK_MS);
+bool       followLineWithDistance(uint8_t upperL, uint8_t lowerL, uint8_t upperR, uint8_t lowerR, uint8_t turnSpeed, uint16_t stopDistanceCm, uint8_t tickMs = LINE_TICK_MS, uint8_t strafeGain = LINE_STRAFE_GAIN, uint8_t yawGain = LINE_YAW_GAIN, uint8_t slowdownGain = LINE_CORRECT_SLOWDOWN);
 void       followLineWithDistance();
 void       moveSlowlyToObject();
 
@@ -723,6 +734,7 @@ static int8_t lineError(uint8_t SL, uint8_t SM, uint8_t SR) {
 // `lastSeenSide` is updated in place (+1 = line last seen on right, -1 = left).
 void steerAlongLine(uint8_t SL, uint8_t SM, uint8_t SR,
                     uint8_t upperL, uint8_t lowerL, uint8_t upperR, uint8_t lowerR, uint8_t turnSpeed,
+                    uint8_t strafeGain, uint8_t yawGain, uint8_t slowdownGain,
                     int8_t &lastSeenSide) {
   // Tracks how long we've been spinning one way with the line fully lost —
   // static because this only makes sense as a running timer across
@@ -739,9 +751,9 @@ void steerAlongLine(uint8_t SL, uint8_t SM, uint8_t SR,
     else if (err < 0) lastSeenSide = -1;
 
     int mag = abs(err);
-    int vx  = LINE_STRAFE_GAIN * err;   // strafe toward the line — the real correction
-    int w   = LINE_YAW_GAIN * err;      // gentle heading alignment, not a pivot
-    int cut = LINE_CORRECT_SLOWDOWN * mag;
+    int vx  = strafeGain * err;   // strafe toward the line — the real correction
+    int w   = yawGain * err;      // gentle heading alignment, not a pivot
+    int cut = slowdownGain * mag;
 
     driveMecanum(max(upperL - cut, 1), max(lowerL - cut, 1),
                  max(upperR - cut, 1), max(lowerR - cut, 1), vx, w);
@@ -764,7 +776,7 @@ void steerAlongLine(uint8_t SL, uint8_t SM, uint8_t SR,
 
 // ── Basic 3-sensor line-follow (KS0560 lesson_6 pattern) ─────────────────────
 // Follow the line, counting all-black crossings; stop when count hits targetCount.
-void followLineWithTarget(int targetCount, uint8_t upperL, uint8_t lowerL, uint8_t upperR, uint8_t lowerR, uint8_t turnSpeed, uint8_t tickMs) {
+void followLineWithTarget(int targetCount, uint8_t upperL, uint8_t lowerL, uint8_t upperR, uint8_t lowerR, uint8_t turnSpeed, uint8_t tickMs, uint8_t strafeGain, uint8_t yawGain, uint8_t slowdownGain) {
   numLines      = 0;
   wasOnFullLine = false;
 
@@ -804,7 +816,7 @@ void followLineWithTarget(int targetCount, uint8_t upperL, uint8_t lowerL, uint8
       wasOnFullLine = false;
     }
 
-    steerAlongLine(SL, SM, SR, upperL, lowerL, upperR, lowerR, turnSpeed, lastSeenSide);
+    steerAlongLine(SL, SM, SR, upperL, lowerL, upperR, lowerR, turnSpeed, strafeGain, yawGain, slowdownGain, lastSeenSide);
     delay(tickMs);
   }
 }
@@ -829,7 +841,7 @@ bool followLineForMs(uint16_t ms) {
     uint8_t SM = digitalRead(LINE_MIDDLE_PIN);
     uint8_t SR = digitalRead(LINE_RIGHT_PIN);
 
-    steerAlongLine(SL, SM, SR, WHEEL_SPEED_UPPER_L, WHEEL_SPEED_LOWER_L, WHEEL_SPEED_UPPER_R, WHEEL_SPEED_LOWER_R, LINE_TURN_SPEED, lastSeenSide);
+    steerAlongLine(SL, SM, SR, WHEEL_SPEED_UPPER_L, WHEEL_SPEED_LOWER_L, WHEEL_SPEED_UPPER_R, WHEEL_SPEED_LOWER_R, LINE_TURN_SPEED, LINE_STRAFE_GAIN, LINE_YAW_GAIN, LINE_CORRECT_SLOWDOWN, lastSeenSide);
     delay(LINE_TICK_MS);
   }
 
@@ -838,7 +850,7 @@ bool followLineForMs(uint16_t ms) {
 }
 
 void moveSlowly(int targetCount) {
-  followLineWithTarget(targetCount, SLOW_LEFT_SPEED, SLOW_LEFT_SPEED, SLOW_RIGHT_SPEED, SLOW_RIGHT_SPEED, SLOW_LINE_TURN_SPEED, SLOW_LINE_TICK_MS);
+  followLineWithTarget(targetCount, SLOW_LEFT_SPEED, SLOW_LEFT_SPEED, SLOW_RIGHT_SPEED, SLOW_RIGHT_SPEED, SLOW_LINE_TURN_SPEED, SLOW_LINE_TICK_MS, SLOW_LINE_STRAFE_GAIN, SLOW_LINE_YAW_GAIN, SLOW_LINE_CORRECT_SLOWDOWN);
 }
 
 // ==========================================================================
@@ -874,7 +886,7 @@ uint16_t readUltrasonicMedian() {
 //  LINE FOLLOWING WITH OBSTACLE STOP
 // ==========================================================================
 
-bool followLineWithDistance(uint8_t upperL, uint8_t lowerL, uint8_t upperR, uint8_t lowerR, uint8_t turnSpeed, uint16_t stopDistanceCm, uint8_t tickMs) {
+bool followLineWithDistance(uint8_t upperL, uint8_t lowerL, uint8_t upperR, uint8_t lowerR, uint8_t turnSpeed, uint16_t stopDistanceCm, uint8_t tickMs, uint8_t strafeGain, uint8_t yawGain, uint8_t slowdownGain) {
   Serial.println(F("Following line with distance check..."));
 
   unsigned long lastIRCheckMs      = 0;
@@ -925,7 +937,7 @@ bool followLineWithDistance(uint8_t upperL, uint8_t lowerL, uint8_t upperR, uint
     uint8_t SM = digitalRead(LINE_MIDDLE_PIN);
     uint8_t SR = digitalRead(LINE_RIGHT_PIN);
 
-    steerAlongLine(SL, SM, SR, upperL, lowerL, upperR, lowerR, turnSpeed, lastSeenSide);
+    steerAlongLine(SL, SM, SR, upperL, lowerL, upperR, lowerR, turnSpeed, strafeGain, yawGain, slowdownGain, lastSeenSide);
     delay(tickMs);
   }
 }
@@ -933,14 +945,14 @@ bool followLineWithDistance(uint8_t upperL, uint8_t lowerL, uint8_t upperR, uint
 // Same tracking logic as followLineWithTarget; runs until an obstacle is
 // detected within OBSTACLE_DISTANCE_CM or STOP is pressed.
 void followLineWithDistance() {
-  if (followLineWithDistance(WHEEL_SPEED_UPPER_L, WHEEL_SPEED_LOWER_L, WHEEL_SPEED_UPPER_R, WHEEL_SPEED_LOWER_R, LINE_TURN_SPEED, APPROACH_DISTANCE_CM, LINE_TICK_MS)) {
+  if (followLineWithDistance(WHEEL_SPEED_UPPER_L, WHEEL_SPEED_LOWER_L, WHEEL_SPEED_UPPER_R, WHEEL_SPEED_LOWER_R, LINE_TURN_SPEED, APPROACH_DISTANCE_CM, LINE_TICK_MS, LINE_STRAFE_GAIN, LINE_YAW_GAIN, LINE_CORRECT_SLOWDOWN)) {
     delay(1000);
     moveSlowlyToObject();
   }
 }
 
 void moveSlowlyToObject() {
-  followLineWithDistance(SLOW_LEFT_SPEED, SLOW_LEFT_SPEED, SLOW_RIGHT_SPEED, SLOW_RIGHT_SPEED, SLOW_LINE_TURN_SPEED, OBSTACLE_DISTANCE_CM, SLOW_LINE_TICK_MS);
+  followLineWithDistance(SLOW_LEFT_SPEED, SLOW_LEFT_SPEED, SLOW_RIGHT_SPEED, SLOW_RIGHT_SPEED, SLOW_LINE_TURN_SPEED, OBSTACLE_DISTANCE_CM, SLOW_LINE_TICK_MS, SLOW_LINE_STRAFE_GAIN, SLOW_LINE_YAW_GAIN, SLOW_LINE_CORRECT_SLOWDOWN);
 }
 
 // ==========================================================================
@@ -1169,7 +1181,6 @@ void path1() {
   if (stopAll) return;
   int colorRes = gripAndIdentifyColor(isGripperOpen);
   delay(5000);
-  delay(300);
   isGripperOpen = !isGripperOpen;
 
   // ── Phase 2: turn around onto the drop lane ──
@@ -1216,15 +1227,16 @@ void path1() {
 void path2() {
   // ── Phase 1: turn onto the object lane (left, then in) ──
   actionLog(F("challenge3: Path 2 - entering left branch"));
-  followLineWithTarget(2);
+  followLineWithTarget(3);
   delay(1000);
-  moveShort(200);
+  moveShort(300);
   delay(500);
   if (!rotate90Left()) return;
+  // moveShort(300);
   delay(1000);
   followLineWithTarget(2);
   delay(500);
-  moveShort(100);
+  moveShort(300);
   delay(500);
   if (!rotate90()) return;
   delay(500);
@@ -1255,7 +1267,7 @@ void path2() {
   delay(500);
   if (!rotate90()) return;
   delay(1000);
-  followLineWithTarget(3);
+  followLineWithTarget(2);
   delay(500);
   moveShort(300);
   delay(500);
@@ -1265,7 +1277,7 @@ void path2() {
   actionLog(F("challenge3: Path 2 - delivering object"));
   followLineWithTarget(5);
   delay(1000);
-  moveSlowly(3);
+  moveSlowly(2);
   delay(1000);
   alignOnCrossLine();
   openGripper(isGripperOpen);
@@ -1285,7 +1297,7 @@ void path3() {
   actionLog(F("challenge3: Path 3 - entering right branch"));
   followLineWithTarget(3);
   delay(500);
-  moveShort(150);
+  moveShort(300);
   delay(500);
   if (!rotate90()) return;
   delay(500);
