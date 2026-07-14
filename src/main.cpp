@@ -37,8 +37,8 @@ const uint8_t  LINE_TURN_SPEED      = 32;   // spin speed for the lost-line reco
 // onto the line (heading untouched) plus a small yaw to fix actual heading
 // error — it never pivots in place, so forward speed never drops to zero.
 // Error is -2..+2 (see lineError). Tune on hardware.
-const uint8_t  LINE_STRAFE_GAIN     = 14;  // strafe PWM per unit of line error — the main correction authority
-const uint8_t  LINE_YAW_GAIN        = 1;   // yaw PWM per unit of line error — keep small; this is what used to cause the zigzag
+const uint8_t  LINE_STRAFE_GAIN     = 10;  // strafe PWM per unit of line error — the main correction authority
+const uint8_t  LINE_YAW_GAIN        = 2;   // yaw PWM per unit of line error — keep small; this is what used to cause the zigzag
 const uint8_t  LINE_CORRECT_SLOWDOWN = 6;  // forward PWM shed per unit of error; sized so vy stays well above zero at |error| = 2
 const uint8_t  SLOW_LEFT_SPEED      = 33;
 const uint8_t  SLOW_RIGHT_SPEED     = 33;
