@@ -769,6 +769,9 @@ ColorLabel gripAndIdentifyColor(bool gOpen, ColorLabel target) {
 
   Serial.println(F("Checking TCS3200 color..."));
   ColorLabel label = classifyColor();
+  char message[24];
+  snprintf(message, sizeof(message), "COLOR_DETECTED %s", colorName(label));
+  actionLog(message);
 
   if (target != ColorLabel::Unknown && label != target) {
     Serial.print(F("Skipping non-target block: "));
