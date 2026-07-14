@@ -35,19 +35,19 @@ const uint8_t SERVO_PIN = 9;
 // band, where they don't all break free from a standstill and small PWM
 // differences turn into large speed differences — keep every speed here well
 // clear of that floor.
-const uint8_t  DRIVE_SPEED   = 40;   // forward speed while following a line
+const uint8_t  DRIVE_SPEED   = 41;   // forward speed while following a line
 const uint8_t  TURN_SPEED    = 50;   // in-place spin speed (rotate90 / searching)
 const uint8_t  TURN_SPEED_180 = 40;  // 180 spins twice as far and builds twice the momentum, so it coasts past the line at full TURN_SPEED — spin it slower
-const uint8_t  SLOW_SPEED    = 34;   // final approach to a block / drop
+const uint8_t  SLOW_SPEED    = 35;   // final approach to a block / drop
 
 // Instructor's line follower adds 10 PWM while correcting. Tune this if the
 // robot turns too sharply or too slowly while recovering the middle sensor.
-const uint8_t  LINE_CORRECT_BOOST = 10;
+const uint8_t  LINE_CORRECT_BOOST = 13;
 
 const uint8_t  TICK_MS       = 5;    // line-follow loop tick
 const uint8_t  TURN_TICK_MS  = 12;   // turn / positioning loop tick
 const uint16_t ROTATE_SENSOR_GRACE_MS = 200;  // ignore the sensors this long after a spin starts
-const uint16_t BRAKE_MS = 35;                 // counter-pulse to cancel spin momentum — shorter now that the robot moves slower and carries less of it (too long = kicks back the other way)
+const uint16_t BRAKE_MS = 40;                 // counter-pulse to cancel spin momentum — shorter now that the robot moves slower and carries less of it (too long = kicks back the other way)
 
 const uint16_t OBSTACLE_DISTANCE_CM = 7;
 const uint16_t APPROACH_DISTANCE_CM = 30;  // switch to the slow creep this far out — raise to start slowing earlier
