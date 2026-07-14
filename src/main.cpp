@@ -40,13 +40,9 @@ const uint8_t  TURN_SPEED    = 50;   // in-place spin speed (rotate90 / searchin
 const uint8_t  TURN_SPEED_180 = 40;  // 180 spins twice as far and builds twice the momentum, so it coasts past the line at full TURN_SPEED — spin it slower
 const uint8_t  SLOW_SPEED    = 34;   // final approach to a block / drop
 
-// Speed of a line-follow correction. Lower than DRIVE_SPEED because a correction
-// is an in-place spin (Turn_Left/Turn_Right reverse one whole side), so running it
-// at full drive speed makes the robot slam between "forward" and "hard pivot".
-// This is the aggression knob: lower = gentler — but it CANNOT go below ~32
-// without dropping into the stall band, where corrections become erratic rather
-// than gentle. With DRIVE_SPEED at 40 there is very little room left here.
-const uint8_t  LINE_CORRECT_SPEED = 33;
+// Instructor's line follower adds 10 PWM while correcting. Tune this if the
+// robot turns too sharply or too slowly while recovering the middle sensor.
+const uint8_t  LINE_CORRECT_BOOST = 10;
 
 const uint8_t  TICK_MS       = 5;    // line-follow loop tick
 const uint8_t  TURN_TICK_MS  = 12;   // turn / positioning loop tick
@@ -482,26 +478,23 @@ bool rotate90Left(uint8_t turnSpeed, uint16_t timeoutMs) {
 //  LINE FOLLOWING
 // ==========================================================================
 //
-// The vendor's 3-sensor pattern, kept deliberately plain: middle sensor owns the
-// lane, an outer sensor lighting up means turn that way. Nothing else.
-//
-// The one addition is LINE_CORRECT_SPEED. A correction is an in-place spin, so
-// running it at DRIVE_SPEED means slamming between full-speed forward and a
-// full-speed pivot — that's what makes the tracking feel violent. Correcting
-// slower than we drive keeps it calm without changing the logic at all.
+// Instructor's 3-sensor pattern: an outer sensor lighting up alone means turn
+// toward it; equal outer readings mean continue. The caller reads the middle
+// sensor too when detecting full-width intersections.
 
 // One steering step. HIGH = sensor is over black.
 static void steerLine(uint8_t speed) {
   uint8_t L = digitalRead(LINE_LEFT_PIN);
   uint8_t R = digitalRead(LINE_RIGHT_PIN);
+  uint8_t correctionSpeed = speed + LINE_CORRECT_BOOST;
 
-  if (L == LOW && R == HIGH) {          // line is off to the right
-    speed_Upper_L = speed_Lower_L = speed_Upper_R = speed_Lower_R = LINE_CORRECT_SPEED;
+  if (L == LOW && R == HIGH) {          // 001 or 011: line is to the right
+    speed_Upper_L = speed_Lower_L = speed_Upper_R = speed_Lower_R = correctionSpeed;
     robot.Turn_Right();
-  } else if (L == HIGH && R == LOW) {   // line is off to the left
-    speed_Upper_L = speed_Lower_L = speed_Upper_R = speed_Lower_R = LINE_CORRECT_SPEED;
+  } else if (L == HIGH && R == LOW) {   // 100 or 110: line is to the left
+    speed_Upper_L = speed_Lower_L = speed_Upper_R = speed_Lower_R = correctionSpeed;
     robot.Turn_Left();
-  } else {                              // centred, or on a crossing
+  } else {                              // 000, 010, 101 or 111: continue forward
     speed_Upper_L = speed_Lower_L = speed_Upper_R = speed_Lower_R = speed;
     robot.Advance();
   }
@@ -755,14 +748,11 @@ int gripAndIdentifyColor(bool gOpen) {
 // for path 1
 bool returnToCheckpoint() {
   reverseShort(300);
-  if (!searchAndCenterLine()) return false;
   if (!rotate90()) return false;
-  if (!searchAndCenterLine()) return false;
   delay(500);
   reverseShort(200);
-  if (!searchAndCenterLine()) return false;
   if (!rotate90()) return false;
-  return searchAndCenterLine();
+  return true;
 }
 
 // ==========================================================================
@@ -787,21 +777,15 @@ void path1() {
   // METHOD A — two discrete 90° turns. Each stops on its own line crossing, so
   // the robot is never more than a quarter-turn of momentum from a known heading.
   // reverseShort(200);
-  // if (!rotate90()) return;
-  // delay(500);
-  // // if (!searchAndCenterLine()) return;
-  // reverseShort(200);
-  // delay(500);
-  // if (!rotate90()) return;
-  // // if (!searchAndCenterLine()) return;
+  if (!rotate90()) return;
+  delay(500);
+  reverseShort(200);
+  delay(500);
+  if (!rotate90()) return;
 
   // METHOD B — single continuous 180° spin (currently active). Counts two
   // right-sensor crossings and stops on the 2nd. Spins at TURN_SPEED_180 (slower
   // than a 90) because a half-turn carries twice the momentum into the stop.
-  reverseShort(200);
-  delay(500);
-  if (!rotate180()) return;
-  // if (!searchAndCenterLine()) return;
 
   // ── Phase 3: drive to the drop zone and release the object ──
   actionLog(F("challenge3: Path 1 - delivering object"));
@@ -818,7 +802,7 @@ void path1() {
   actionLog(F("challenge3: Path 1 - returning to checkpoint"));
   sendArmCommand(colorRes);
   if (!returnToCheckpoint()) return;
-  if (!searchAndCenterLine()) return;
+
 }
 
 // path2 — LEFT-side run. Fetches the object from the left branch and brings
