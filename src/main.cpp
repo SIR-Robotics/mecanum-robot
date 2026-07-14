@@ -89,7 +89,9 @@ const uint8_t  STOP_KEY             = 64;
 
 struct RGB { uint8_t r, g, b; };
 
-enum class ColorLabel { Red, Blue, Yellow };
+enum class ColorLabel { Unknown, Red, Blue, Yellow };
+
+ColorLabel pendingColorTarget = ColorLabel::Unknown;
 
 // ==========================================================================
 //  FORWARD DECLARATIONS
@@ -98,9 +100,11 @@ enum class ColorLabel { Red, Blue, Yellow };
 // Forward declarations — every function is declared here so the definitions
 // below can be grouped by topic regardless of call order. Default arguments
 // live only in these declarations.
-int        readRawColor(bool s2, bool s3);
-RGB        readColor();
+unsigned long readRawColor(bool s2, bool s3);
+bool       readColor(RGB& color);
+ColorLabel classifyColorSample();
 ColorLabel classifyColor();
+const char* colorName(ColorLabel color);
 
 void       stopEverything();
 bool       stopRequested();
@@ -110,7 +114,7 @@ void       logEsp32Messages();
 void       handleEsp32Line(String line);
 void       actionLog(const char* message);
 void       actionLog(const __FlashStringHelper* message);
-void       sendArmCommand(int colorRes);
+void       sendArmCommand(ColorLabel color);
 
 void       brakePulse(void (mecanumCar::*counterMove)());
 bool       moveShort(uint16_t durationMs = 300);
@@ -134,13 +138,14 @@ bool       searchAndCenterLine(uint16_t timeoutMs = 1500, int8_t initialLastSeen
 bool       alignOnCrossLine(uint16_t timeoutMs = ALIGN_TIMEOUT_MS);
 
 void       openGripper(bool state);
-int        gripAndIdentifyColor(bool gOpen);
+ColorLabel gripAndIdentifyColor(bool gOpen, ColorLabel target = ColorLabel::Unknown);
 
 bool       returnToCheckpoint();
 
-void       path1();
-void       path2();
-void       path3();
+bool       path1(ColorLabel* detectedColor = nullptr, ColorLabel target = ColorLabel::Unknown);
+bool       path2(ColorLabel* detectedColor = nullptr, ColorLabel target = ColorLabel::Unknown);
+bool       path3(ColorLabel* detectedColor = nullptr, ColorLabel target = ColorLabel::Unknown);
+void       runColorFinder(ColorLabel target);
 void       runCommandKey(int key, const char* source);
 
 // ==========================================================================
@@ -148,7 +153,7 @@ void       runCommandKey(int key, const char* source);
 // ==========================================================================
 
 // Read raw pulse width (µs) for given photodiode filter
-int readRawColor(bool s2, bool s3) {
+unsigned long readRawColor(bool s2, bool s3) {
   digitalWrite(CS_S2, s2);
   digitalWrite(CS_S3, s3);
   delay(10);  // Let filter settle
@@ -156,28 +161,57 @@ int readRawColor(bool s2, bool s3) {
 }
 
 // Read normalized RGB (0-255) using calibration values
-RGB readColor() {
-  int rawR = readRawColor(LOW,  LOW);
-  int rawG = readRawColor(HIGH, HIGH);
-  int rawB = readRawColor(LOW,  HIGH);
+bool readColor(RGB& color) {
+  unsigned long rawR = readRawColor(LOW,  LOW);
+  unsigned long rawG = readRawColor(HIGH, HIGH);
+  unsigned long rawB = readRawColor(LOW,  HIGH);
 
-  RGB c;
-  c.r = constrain(map(rawR, blackR, whiteR, 0, 255), 0, 255);
-  c.g = constrain(map(rawG, blackG, whiteG, 0, 255), 0, 255);
-  c.b = constrain(map(rawB, blackB, whiteB, 0, 255), 0, 255);
+  if (rawR == 0 || rawG == 0 || rawB == 0) {
+    Serial.println(F("Color sensor timeout."));
+    return false;
+  }
 
-  Serial.print(F("R: ")); Serial.print(c.r);
-  Serial.print(F(" G: ")); Serial.print(c.g);
-  Serial.print(F(" B: ")); Serial.println(c.b);
-  return c;
+  color.r = constrain(map(rawR, blackR, whiteR, 0, 255), 0, 255);
+  color.g = constrain(map(rawG, blackG, whiteG, 0, 255), 0, 255);
+  color.b = constrain(map(rawB, blackB, whiteB, 0, 255), 0, 255);
+
+  Serial.print(F("R: ")); Serial.print(color.r);
+  Serial.print(F(" G: ")); Serial.print(color.g);
+  Serial.print(F(" B: ")); Serial.println(color.b);
+  return true;
 }
 
-ColorLabel classifyColor() {
-  RGB color = readColor(); // already logs R/G/B internally
+ColorLabel classifyColorSample() {
+  RGB color;
+  if (!readColor(color)) return ColorLabel::Unknown;
 
   if (color.b > color.r && color.b > color.g) return ColorLabel::Blue;
   if (color.r > color.g && color.r > color.b) return ColorLabel::Red;
-  return ColorLabel::Yellow;
+  if (color.g > color.r && color.g > color.b) return ColorLabel::Yellow;
+  return ColorLabel::Unknown;
+}
+
+ColorLabel classifyColor() {
+  uint8_t red = 0, blue = 0, yellow = 0;
+
+  for (uint8_t i = 0; i < 3; i++) {
+    ColorLabel sample = classifyColorSample();
+    if (sample == ColorLabel::Red) red++;
+    else if (sample == ColorLabel::Blue) blue++;
+    else if (sample == ColorLabel::Yellow) yellow++;
+  }
+
+  if (red >= 2) return ColorLabel::Red;
+  if (blue >= 2) return ColorLabel::Blue;
+  if (yellow >= 2) return ColorLabel::Yellow;
+  return ColorLabel::Unknown;
+}
+
+const char* colorName(ColorLabel color) {
+  if (color == ColorLabel::Red) return "RED";
+  if (color == ColorLabel::Blue) return "BLUE";
+  if (color == ColorLabel::Yellow) return "YELLOW";
+  return "UNKNOWN";
 }
 
 // ==========================================================================
@@ -230,6 +264,16 @@ void handleEsp32Line(String line) {
     return;
   }
 
+  if (line.startsWith("FIND_COLOR ")) {
+    String color = line.substring(11);
+    color.trim();
+    if (color == "RED") pendingColorTarget = ColorLabel::Red;
+    else if (color == "BLUE") pendingColorTarget = ColorLabel::Blue;
+    else if (color == "YELLOW") pendingColorTarget = ColorLabel::Yellow;
+    else Serial.println(F("Invalid color finder target."));
+    return;
+  }
+
   // Connection status arrives whenever the ESP32 gets around to sending it —
   // setup() no longer waits for it. Flash the LEDs to acknowledge; loop() turns
   // them back off once statusLedOffAtMs passes.
@@ -276,11 +320,11 @@ void actionLog(const __FlashStringHelper* message) {
   espSerial.flush();
 }
 
-void sendArmCommand(int colorRes) {
+void sendArmCommand(ColorLabel color) {
   const char* command = nullptr;
-  if (colorRes == 0) command = "RUN_BLUE";
-  else if (colorRes == 1) command = "RUN_RED";
-  else if (colorRes == 2) command = "RUN_YELLOW";
+  if (color == ColorLabel::Blue) command = "RUN_BLUE";
+  else if (color == ColorLabel::Red) command = "RUN_RED";
+  else if (color == ColorLabel::Yellow) command = "RUN_YELLOW";
   if (!command) return;
 
   while (espSerial.available()) espSerial.read();
@@ -720,25 +764,31 @@ void openGripper(bool state) {
   Serial.println(state ? "Gripper: close" : "Gripper: open");
 }
 
-int gripAndIdentifyColor(bool gOpen) {
-  if (stopRequested()) return -1;
+ColorLabel gripAndIdentifyColor(bool gOpen, ColorLabel target) {
+  if (stopRequested()) return ColorLabel::Unknown;
 
   Serial.println(F("Checking TCS3200 color..."));
   ColorLabel label = classifyColor();
+
+  if (target != ColorLabel::Unknown && label != target) {
+    Serial.print(F("Skipping non-target block: "));
+    Serial.println(colorName(label));
+    return label;
+  }
 
   openGripper(gOpen);
   delay(1000);
 
   if (label == ColorLabel::Blue) {
     Serial.println(F("Blue detected. Gripper closed at 180."));
-    return 0;
   } else if (label == ColorLabel::Red) {
     Serial.println(F("Red detected. Gripper closed at 180."));
-    return 1;
-  } else {
+  } else if (label == ColorLabel::Yellow) {
     Serial.println(F("Yellow detected. Gripper closed at 180."));
-    return 2;
+  } else {
+    Serial.println(F("Color unknown. Gripper closed at 180."));
   }
+  return label;
 }
 
 // ==========================================================================
@@ -761,14 +811,18 @@ bool returnToCheckpoint() {
 
 // path1 — pick up the object straight ahead, ferry it to the drop lane,
 // release it, signal the arm which colour it was, then return to the checkpoint.
-void path1() {
+bool path1(ColorLabel* detectedColor, ColorLabel target) {
   // ── Phase 1: approach the object, grip & identify its colour ──
   actionLog(F("challenge3: Path 1 - approaching object"));
   followLineWithDistance();
-  if (stopAll) return;
-  int colorRes = gripAndIdentifyColor(isGripperOpen);
-  delay(5000);
-  isGripperOpen = !isGripperOpen;
+  if (stopAll) return false;
+  ColorLabel colorRes = gripAndIdentifyColor(isGripperOpen, target);
+  if (stopAll) return false;
+  bool picked = target == ColorLabel::Unknown || colorRes == target;
+  if (picked) {
+    delay(5000);
+    isGripperOpen = !isGripperOpen;
+  }
 
   // ── Phase 2: turn around onto the drop lane ──
   actionLog(F("challenge3: Path 1 - turning to drop lane"));
@@ -777,146 +831,196 @@ void path1() {
   // METHOD A — two discrete 90° turns. Each stops on its own line crossing, so
   // the robot is never more than a quarter-turn of momentum from a known heading.
   // reverseShort(200);
-  if (!rotate90()) return;
+  if (!rotate90()) return false;
   delay(500);
   reverseShort(200);
   delay(500);
-  if (!rotate90()) return;
+  if (!rotate90()) return false;
 
   // METHOD B — single continuous 180° spin (currently active). Counts two
   // right-sensor crossings and stops on the 2nd. Spins at TURN_SPEED_180 (slower
   // than a 90) because a half-turn carries twice the momentum into the stop.
 
   // ── Phase 3: drive to the drop zone and release the object ──
-  actionLog(F("challenge3: Path 1 - delivering object"));
+  actionLog(picked ? F("challenge3: Path 1 - delivering object")
+                   : F("challenge3: Path 1 - skipping non-target object"));
   followLineWithTarget(5);
   delay(1000);
   moveSlowly(2);
   delay(1000);
   alignOnCrossLine();
-  openGripper(isGripperOpen);
-  delay(5000);
-  isGripperOpen = !isGripperOpen;
+  if (picked) {
+    openGripper(isGripperOpen);
+    delay(5000);
+    isGripperOpen = !isGripperOpen;
+  }
 
   // ── Phase 4: signal the arm, then return to the checkpoint ──
   actionLog(F("challenge3: Path 1 - returning to checkpoint"));
-  sendArmCommand(colorRes);
-  if (!returnToCheckpoint()) return;
-
+  if (picked) sendArmCommand(colorRes);
+  if (!returnToCheckpoint()) return false;
+  if (detectedColor) *detectedColor = colorRes;
+  return true;
 }
 
 // path2 — LEFT-side run. Fetches the object from the left branch and brings
 // it to the drop zone (mirror of path3; distances are hand-tuned per side).
-void path2() {
+bool path2(ColorLabel* detectedColor, ColorLabel target) {
   // ── Phase 1: turn onto the object lane (left, then in) ──
   actionLog(F("challenge3: Path 2 - entering left branch"));
   followLineWithTarget(3);
   delay(1000);
   moveShort(300);
   delay(500);
-  if (!rotate90Left()) return;
+  if (!rotate90Left()) return false;
   delay(1000);
   followLineWithTarget(2);
   delay(500);
   moveShort(300);
   delay(500);
-  if (!rotate90()) return;
+  if (!rotate90()) return false;
   delay(500);
 
   // ── Phase 2: approach the object, grip & identify its colour ──
   actionLog(F("challenge3: Path 2 - approaching object"));
   followLineWithDistance();
   delay(500);
-  int colorRes = gripAndIdentifyColor(isGripperOpen);
-  if (colorRes < 0) return;
-  delay(500);
-  delay(1000);
-  isGripperOpen = !isGripperOpen;
-  delay(1000);
+  ColorLabel colorRes = gripAndIdentifyColor(isGripperOpen, target);
+  if (stopAll) return false;
+  bool picked = target == ColorLabel::Unknown || colorRes == target;
+  if (picked) {
+    delay(1500);
+    isGripperOpen = !isGripperOpen;
+    delay(1000);
+  }
 
   // ── Phase 3: back off and navigate to the drop lane ──
   actionLog(F("challenge3: Path 2 - navigating to drop lane"));
   reverseShort(100);
   delay(500);
-  if (!rotate90()) return;
+  if (!rotate90()) return false;
   delay(1000);
   followLineWithTarget(2);
   delay(500);
   moveShort(300);
   delay(500);
-  if (!rotate90()) return;
+  if (!rotate90()) return false;
 
   // ── Phase 4: final approach and release the object ──
-  actionLog(F("challenge3: Path 2 - delivering object"));
+  actionLog(picked ? F("challenge3: Path 2 - delivering object")
+                   : F("challenge3: Path 2 - skipping non-target object"));
   followLineWithTarget(5);
   delay(1000);
   moveSlowly(2);
   delay(1000);
   alignOnCrossLine();
-  openGripper(isGripperOpen);
-  delay(5000);
-  isGripperOpen = !isGripperOpen;
+  if (picked) {
+    openGripper(isGripperOpen);
+    delay(5000);
+    isGripperOpen = !isGripperOpen;
+  }
 
   // ── Phase 5: return to the checkpoint ──
   actionLog(F("challenge3: Path 2 - returning to checkpoint"));
-  if (!returnToCheckpoint()) return;
-  if (!searchAndCenterLine()) return;
+  if (!returnToCheckpoint()) return false;
+  if (!searchAndCenterLine()) return false;
+  if (detectedColor) *detectedColor = colorRes;
+  return true;
 }
 
 // path3 — RIGHT-side run: mirror of path2. Fetches the object from the right
 // branch and brings it to the drop zone (hand-tuned distances differ from path2).
-void path3() {
+bool path3(ColorLabel* detectedColor, ColorLabel target) {
   // ── Phase 1: turn onto the object lane (right, then in) ──
   actionLog(F("challenge3: Path 3 - entering right branch"));
   followLineWithTarget(3);
   delay(500);
   moveShort(300);
   delay(500);
-  if (!rotate90()) return;
+  if (!rotate90()) return false;
   delay(500);
   followLineWithTarget(2);
   delay(500);
   moveShort(300);
   delay(500);
-  if (!rotate90Left()) return;
+  if (!rotate90Left()) return false;
   delay(500);
 
   // ── Phase 2: approach the object, grip & identify its colour ──
   actionLog(F("challenge3: Path 3 - approaching object"));
   followLineWithDistance();
-  if (stopAll) return;
+  if (stopAll) return false;
 
-  int colorRes = gripAndIdentifyColor(isGripperOpen);
-  if (colorRes < 0) return;
-  delay(5000);
-  isGripperOpen = !isGripperOpen;
+  ColorLabel colorRes = gripAndIdentifyColor(isGripperOpen, target);
+  if (stopAll) return false;
+  bool picked = target == ColorLabel::Unknown || colorRes == target;
+  if (picked) {
+    delay(5000);
+    isGripperOpen = !isGripperOpen;
+  }
 
   // ── Phase 3: back off and navigate to the drop lane ──
   actionLog(F("challenge3: Path 3 - navigating to drop lane"));
   reverseShort(150);
   delay(500);
-  if (!rotate90Left()) return;
+  if (!rotate90Left()) return false;
   delay(1000);
   followLineWithTarget(2);
   delay(500);
   moveShort(400);
   delay(500);
-  if (!rotate90Left()) return;
+  if (!rotate90Left()) return false;
 
   // ── Phase 4: final approach and release the object ──
-  actionLog(F("challenge3: Path 3 - delivering object"));
-  if (!searchAndCenterLine()) return;
+  actionLog(picked ? F("challenge3: Path 3 - delivering object")
+                   : F("challenge3: Path 3 - skipping non-target object"));
+  if (!searchAndCenterLine()) return false;
   followLineWithTarget(4);
   delay(1000);
   moveSlowly(2);
   delay(1000);
   alignOnCrossLine();
-  openGripper(isGripperOpen);
-  delay(5000);
-  isGripperOpen = !isGripperOpen;
+  if (picked) {
+    openGripper(isGripperOpen);
+    delay(5000);
+    isGripperOpen = !isGripperOpen;
+  }
   // ── Phase 5: return to the checkpoint ──
   actionLog(F("challenge3: Path 3 - returning to checkpoint"));
-  if (!returnToCheckpoint()) return;
+  if (!returnToCheckpoint()) return false;
+  if (detectedColor) *detectedColor = colorRes;
+  return true;
+}
+
+void runColorFinder(ColorLabel target) {
+  bool (*paths[])(ColorLabel*, ColorLabel) = {path1, path2, path3};
+  char message[40];
+
+  stopAll = false;
+  snprintf(message, sizeof(message), "color finder: searching %s", colorName(target));
+  actionLog(message);
+
+  for (uint8_t i = 0; i < 3; i++) {
+    ColorLabel detected = ColorLabel::Unknown;
+    if (!paths[i](&detected, target)) {
+      actionLog(F("color finder: aborted"));
+      return;
+    }
+
+    if (detected == target) {
+      snprintf(message, sizeof(message), "COLOR_FOUND %s", colorName(target));
+      actionLog(message);
+      return;
+    }
+
+    if (i < 2 && (stopRequested() || waitOrStop(1000))) {
+      actionLog(F("color finder: aborted"));
+      return;
+    }
+  }
+
+  snprintf(message, sizeof(message), "COLOR_NOT_FOUND %s", colorName(target));
+  actionLog(message);
 }
 
 void runCommandKey(int key, const char* source) {
@@ -998,6 +1102,10 @@ void loop() {
     int key = pendingEspKey;
     pendingEspKey = -1;
     runCommandKey(key, "favoriot");
+  } else if (pendingColorTarget != ColorLabel::Unknown) {
+    ColorLabel target = pendingColorTarget;
+    pendingColorTarget = ColorLabel::Unknown;
+    runColorFinder(target);
   } else {
     runCommandKey(IRreceive.getKey(), "ir");
   }
