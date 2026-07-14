@@ -35,8 +35,9 @@ const uint8_t  LINE_TURN_SPEED      = 32;   // spin speed for line-follow correc
 const uint8_t  SLOW_LEFT_SPEED      = 33;
 const uint8_t  SLOW_RIGHT_SPEED     = 33;
 const uint8_t  SLOW_LINE_TURN_SPEED = 31;
-const uint8_t  LINE_TICK_MS         = 4;   // follow-loop tick delay
+const uint8_t  LINE_TICK_MS         = 2;   // follow-loop tick delay (line-follow correction only)
 const uint8_t  SLOW_LINE_TICK_MS    = 2;   // tick delay for the slow-approach phase — tighter than LINE_TICK_MS to keep per-correction coverage small at low speed
+const uint8_t  TURN_TICK_MS         = 12;  // tick delay for dedicated turn/positioning maneuvers (rotate90/90Left/180, searchAndCenterLine, robotReverse, strafeLeft) — decoupled from LINE_TICK_MS since these weren't validated at the aggressive correction tick
 const uint16_t OBSTACLE_DISTANCE_CM = 7;
 const uint16_t APPROACH_DISTANCE_CM = 20;
 const uint16_t ULTRASONIC_SAMPLE_MS = 50;
@@ -493,7 +494,7 @@ bool robotReverse(uint16_t timeoutMs, uint16_t reverseBlindMs) {
     }
 
     if (!onPoint) leftStartPoint = true;
-    delay(LINE_TICK_MS);
+    delay(TURN_TICK_MS);
   }
 
   robot.Stop();
@@ -532,7 +533,7 @@ void strafeLeft(int targetCount) {
     }
 
     robot.L_Move();
-    delay(LINE_TICK_MS);
+    delay(TURN_TICK_MS);
   }
 
   robot.Stop();
@@ -565,7 +566,7 @@ bool rotate90(uint8_t turnSpeed, uint16_t timeoutMs) {
     }
 
     robot.Turn_Right();
-    delay(LINE_TICK_MS);
+    delay(TURN_TICK_MS);
   }
   robot.Stop();
   delay(1000);
@@ -596,7 +597,7 @@ bool rotate90Left(uint8_t turnSpeed, uint16_t timeoutMs) {
     }
 
     robot.Turn_Left();
-    delay(LINE_TICK_MS);
+    delay(TURN_TICK_MS);
   }
   robot.Stop();
   delay(1000);
@@ -643,7 +644,7 @@ bool rotate180(uint8_t turnSpeed, uint16_t timeoutMs) {
     }
 
     robot.Turn_Right();
-    delay(LINE_TICK_MS);
+    delay(TURN_TICK_MS);
   }
   robot.Stop();
   delay(1000);
@@ -926,7 +927,7 @@ bool searchAndCenterLine(uint16_t timeoutMs, int8_t initialLastSeenSide) {
         Serial.println("Line found and centered.");
         return true;
       }
-      delay(LINE_TICK_MS);
+      delay(TURN_TICK_MS);
       continue;
     }
     centeredTicks = 0;
@@ -958,7 +959,7 @@ bool searchAndCenterLine(uint16_t timeoutMs, int8_t initialLastSeenSide) {
         robot.Advance();
       }
 
-      delay(LINE_TICK_MS);
+      delay(TURN_TICK_MS);
       continue;
     }
 
@@ -995,7 +996,7 @@ bool searchAndCenterLine(uint16_t timeoutMs, int8_t initialLastSeenSide) {
         break;
     }
 
-    delay(LINE_TICK_MS);
+    delay(TURN_TICK_MS);
   }
 }
 
@@ -1188,7 +1189,7 @@ void path2() {
   delay(500);
   if (!rotate90()) return;
   delay(1000);
-  followLineWithTarget(2);
+  followLineWithTarget(3);
   delay(500);
   moveShort(300);
   delay(500);
@@ -1361,9 +1362,9 @@ void runCommandKey(int key, const char* source) {
     //   fetchBlue();
     //   break;
 
-    // case 90: // number 6 — drive forward at the production per-wheel speeds (see WHEEL_SPEED_* constants)
-    //   moveForwardWheelSpeeds(WHEEL_SPEED_UPPER_L, WHEEL_SPEED_LOWER_L, WHEEL_SPEED_UPPER_R, WHEEL_SPEED_LOWER_R);
-    //   break;
+    case 90: // number 6 — drive forward at the production per-wheel speeds (see WHEEL_SPEED_* constants)
+      moveForwardWheelSpeeds(WHEEL_SPEED_UPPER_L, WHEEL_SPEED_LOWER_L, WHEEL_SPEED_UPPER_R, WHEEL_SPEED_LOWER_R);
+      break;
 
     default:
       break;
