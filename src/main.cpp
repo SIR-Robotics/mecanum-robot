@@ -31,7 +31,15 @@ const uint8_t TRIG_PIN = 12;
 const uint8_t SERVO_PIN = 9;
 
 const uint8_t  TURNING_SPEED        = 54;
-const uint8_t  LINE_TURN_SPEED      = 32;   // spin speed for line-follow corrections
+const uint8_t  LINE_TURN_SPEED      = 32;   // spin speed for the lost-line recovery search only — normal tracking no longer spins (see steerAlongLine)
+
+// Line-follow correction gains. Tracking corrects by strafing the chassis back
+// onto the line (heading untouched) plus a small yaw to fix actual heading
+// error — it never pivots in place, so forward speed never drops to zero.
+// Error is -2..+2 (see lineError). Tune on hardware.
+const uint8_t  LINE_STRAFE_GAIN     = 14;  // strafe PWM per unit of line error — the main correction authority
+const uint8_t  LINE_YAW_GAIN        = 1;   // yaw PWM per unit of line error — keep small; this is what used to cause the zigzag
+const uint8_t  LINE_CORRECT_SLOWDOWN = 6;  // forward PWM shed per unit of error; sized so vy stays well above zero at |error| = 2
 const uint8_t  SLOW_LEFT_SPEED      = 33;
 const uint8_t  SLOW_RIGHT_SPEED     = 33;
 const uint8_t  SLOW_LINE_TURN_SPEED = 31;
@@ -188,9 +196,9 @@ RGB readColor() {
   c.g = constrain(map(rawG, blackG, whiteG, 0, 255), 0, 255);
   c.b = constrain(map(rawB, blackB, whiteB, 0, 255), 0, 255);
 
-  Serial.print("R: "); Serial.print(c.r);
-  Serial.print(" G: "); Serial.print(c.g);
-  Serial.print(" B: "); Serial.println(c.b);
+  Serial.print(F("R: ")); Serial.print(c.r);
+  Serial.print(F(" G: ")); Serial.print(c.g);
+  Serial.print(F(" B: ")); Serial.println(c.b);
   return c;
 }
 
@@ -211,7 +219,7 @@ void stopEverything() {
   stopAll = true;
   robot.right_led(false);
   robot.left_led(false);
-  Serial.println("Stopped.");
+  Serial.println(F("Stopped."));
 }
 
 bool stopRequested() {
@@ -247,12 +255,12 @@ void handleEsp32Line(String line) {
   line.trim();
   if (line.startsWith("IR_KEY")) {
     pendingEspKey = line.substring(6).toInt();
-    Serial.print("ESP32 command key: ");
+    Serial.print(F("ESP32 command key: "));
     Serial.println(pendingEspKey);
     return;
   }
 
-  Serial.print("ESP32: ");
+  Serial.print(F("ESP32: "));
   Serial.println(line);
 }
 
@@ -272,16 +280,16 @@ void logEsp32Messages() {
 }
 
 void actionLog(const char* message) {
-  Serial.print("action: ");
+  Serial.print(F("action: "));
   Serial.println(message);
   espSerial.listen();
-  espSerial.print("ACTION_LOG ");
+  espSerial.print(F("ACTION_LOG "));
   espSerial.println(message);
   espSerial.flush();
 }
 
 bool connectEsp32Wifi() {
-  Serial.println("Waiting for ESP32 WiFi...");
+  Serial.println(F("Waiting for ESP32 WiFi..."));
 
   unsigned long startMs = millis();
   bool wifiConnected = false;
@@ -292,7 +300,7 @@ bool connectEsp32Wifi() {
       if (c == '\n') {
         line.trim();
         if (line.length() > 0) {
-          Serial.print("ESP32: ");
+          Serial.print(F("ESP32: "));
           Serial.println(line);
           if (line.startsWith("WIFI_CONNECTED")) wifiConnected = true;
           if (line.startsWith("MQTT_CONNECTED")) return true;
@@ -305,7 +313,7 @@ bool connectEsp32Wifi() {
       }
     }
   }
-  if (!wifiConnected) Serial.println("ESP32 not responding.");
+  if (!wifiConnected) Serial.println(F("ESP32 not responding."));
   return wifiConnected;
 }
 
@@ -327,7 +335,7 @@ bool runArmCommand(const char* command, const char* okResponse, const char* fail
       if (c == '\n') {
         line.trim();
         if (line.length() > 0) {
-          Serial.print("ESP32: ");
+          Serial.print(F("ESP32: "));
           Serial.println(line);
           if (line == okResponse) return true;
           if (line == failResponse) return false;
@@ -339,7 +347,7 @@ bool runArmCommand(const char* command, const char* okResponse, const char* fail
     }
   }
 
-  Serial.println("ESP32 arm command timeout.");
+  Serial.println(F("ESP32 arm command timeout."));
   return false;
 }
 
@@ -378,16 +386,16 @@ void sendArmCommand(int colorRes) {
 // can't be computed from actual speed — BRAKE_MS is hand-tuned. `counterMove` is the
 // motor primitive that spins/strafes opposite to the motion being braked.
 void brakePulse(void (mecanumCar::*counterMove)()) {
-  Serial.print("Brake pulse ");
+  Serial.print(F("Brake pulse "));
   Serial.print(BRAKE_MS);
-  Serial.println("ms");
+  Serial.println(F("ms"));
   (robot.*counterMove)();
   delay(BRAKE_MS);
   robot.Stop();
 }
 
 void turnRight90() {
-  Serial.println("Turning right 90 degrees...");
+  Serial.println(F("Turning right 90 degrees..."));
   speed_Upper_L = speed_Lower_L = speed_Upper_R = speed_Lower_R = TURNING_SPEED;
   robot.Advance();
   delay(300);
@@ -400,7 +408,7 @@ void turnRight90() {
 }
 
 bool moveShort(uint16_t durationMs) {
-  Serial.println("Moving short distance...");
+  Serial.println(F("Moving short distance..."));
 
   speed_Upper_L = WHEEL_SPEED_UPPER_L;
   speed_Lower_L = WHEEL_SPEED_LOWER_L;
@@ -421,10 +429,10 @@ bool moveShort(uint16_t durationMs) {
 // constants — lets a caller (e.g. the remote's wheel-test button) try out
 // values on the fly without re-flashing.
 bool moveForwardWheelSpeeds(uint8_t upperL, uint8_t lowerL, uint8_t upperR, uint8_t lowerR, uint16_t durationMs) {
-  Serial.print("Wheel speeds — UL:"); Serial.print(upperL);
-  Serial.print(" LL:"); Serial.print(lowerL);
-  Serial.print(" UR:"); Serial.print(upperR);
-  Serial.print(" LR:"); Serial.println(lowerR);
+  Serial.print(F("Wheel speeds — UL:")); Serial.print(upperL);
+  Serial.print(F(" LL:")); Serial.print(lowerL);
+  Serial.print(F(" UR:")); Serial.print(upperR);
+  Serial.print(F(" LR:")); Serial.println(lowerR);
 
   speed_Upper_L = upperL;
   speed_Lower_L = lowerL;
@@ -442,7 +450,7 @@ bool moveForwardWheelSpeeds(uint8_t upperL, uint8_t lowerL, uint8_t upperR, uint
 }
 
 bool reverseShort(uint16_t durationMs) {
-  Serial.println("Reversing short distance...");
+  Serial.println(F("Reversing short distance..."));
 
   speed_Upper_L = WHEEL_SPEED_UPPER_L;
   speed_Lower_L = WHEEL_SPEED_LOWER_L;
@@ -489,7 +497,7 @@ bool robotReverse(uint16_t timeoutMs, uint16_t reverseBlindMs) {
 
     if (leftStartPoint && onPoint) {
       robot.Stop();
-      Serial.println("Reverse point reached.");
+      Serial.println(F("Reverse point reached."));
       return true;
     }
 
@@ -498,7 +506,7 @@ bool robotReverse(uint16_t timeoutMs, uint16_t reverseBlindMs) {
   }
 
   robot.Stop();
-  Serial.println("Reverse timeout. Point not found.");
+  Serial.println(F("Reverse timeout. Point not found."));
   return false;
 }
 
@@ -508,7 +516,7 @@ void strafeLeft(int targetCount) {
 
   speed_Upper_L = speed_Lower_L = speed_Upper_R = speed_Lower_R = 60;
 
-  Serial.print("Strafing left. Target left lines: ");
+  Serial.print(F("Strafing left. Target left lines: "));
   Serial.println(targetCount);
 
   while (detectedLines < targetCount) {
@@ -523,9 +531,9 @@ void strafeLeft(int targetCount) {
       if (!wasOnLeftLine) {
         detectedLines++;
         wasOnLeftLine = true;
-        Serial.print("Left line detected: ");
+        Serial.print(F("Left line detected: "));
         Serial.print(detectedLines);
-        Serial.print("/");
+        Serial.print(F("/"));
         Serial.println(targetCount);
       }
     } else {
@@ -544,7 +552,7 @@ void strafeLeft(int targetCount) {
 // ==========================================================================
 
 bool rotate90(uint8_t turnSpeed, uint16_t timeoutMs) {
-  Serial.println("Rotating 90 degrees until right sensor detects line...");
+  Serial.println(F("Rotating 90 degrees until right sensor detects line..."));
 
   unsigned long startMs = millis();
 
@@ -561,7 +569,7 @@ bool rotate90(uint8_t turnSpeed, uint16_t timeoutMs) {
 
     if (millis() - startMs >= ROTATE_SENSOR_GRACE_MS && SR == HIGH) {
       brakePulse(&mecanumCar::Turn_Left);   // cancel spin momentum before centering
-      Serial.println("Right sensor detected line.");
+      Serial.println(F("Right sensor detected line."));
       return searchAndCenterLine(1500, +1);
     }
 
@@ -570,12 +578,12 @@ bool rotate90(uint8_t turnSpeed, uint16_t timeoutMs) {
   }
   robot.Stop();
   delay(1000);
-  Serial.println("Rotate 90 timeout. Right sensor did not detect line.");
+  Serial.println(F("Rotate 90 timeout. Right sensor did not detect line."));
   return false;
 }
 
 bool rotate90Left(uint8_t turnSpeed, uint16_t timeoutMs) {
-  Serial.println("Rotating 90 degrees until left sensor detects line...");
+  Serial.println(F("Rotating 90 degrees until left sensor detects line..."));
 
   unsigned long startMs = millis();
 
@@ -592,7 +600,7 @@ bool rotate90Left(uint8_t turnSpeed, uint16_t timeoutMs) {
 
     if (millis() - startMs >= ROTATE_SENSOR_GRACE_MS && SL == HIGH) {
       brakePulse(&mecanumCar::Turn_Right);   // cancel spin momentum before centering
-      Serial.println("Left sensor detected line.");
+      Serial.println(F("Left sensor detected line."));
       return searchAndCenterLine(1500, -1);
     }
 
@@ -601,7 +609,7 @@ bool rotate90Left(uint8_t turnSpeed, uint16_t timeoutMs) {
   }
   robot.Stop();
   delay(1000);
-  Serial.println("Rotate 90 timeout. Left sensor did not detect line.");
+  Serial.println(F("Rotate 90 timeout. Left sensor did not detect line."));
   return false;
 }
 
@@ -611,7 +619,7 @@ bool rotate90Left(uint8_t turnSpeed, uint16_t timeoutMs) {
 // is the ~90° line, the second is the ~180° line. Added for A/B comparison against
 // the two-90 method in path1; timeout is larger since the spin is twice as long.
 bool rotate180(uint8_t turnSpeed, uint16_t timeoutMs) {
-  Serial.println("Rotating 180 degrees (single spin) until 2nd right-line crossing...");
+  Serial.println(F("Rotating 180 degrees (single spin) until 2nd right-line crossing..."));
 
   unsigned long startMs = millis();
 
@@ -635,7 +643,7 @@ bool rotate180(uint8_t turnSpeed, uint16_t timeoutMs) {
         crossings++;
         if (crossings >= 2) {
           robot.Stop();
-          Serial.println("Second line crossing — 180° reached.");
+          Serial.println(F("Second line crossing — 180° reached."));
           return true;
         }
       } else if (SR == LOW) {               // left the line; ready for next crossing
@@ -648,7 +656,7 @@ bool rotate180(uint8_t turnSpeed, uint16_t timeoutMs) {
   }
   robot.Stop();
   delay(1000);
-  Serial.println("Rotate 180 timeout. Second line crossing not detected.");
+  Serial.println(F("Rotate 180 timeout. Second line crossing not detected."));
   return false;
 }
 
@@ -656,10 +664,53 @@ bool rotate180(uint8_t turnSpeed, uint16_t timeoutMs) {
 //  LINE FOLLOWING
 // ==========================================================================
 
-// One steering step shared by every line-follower. Middle sensor owns the lane;
-// side sensors correct only when the middle is off; if the line is lost entirely,
-// keep turning toward whichever side saw it last. `lastSeenSide` is updated in
-// place (+1 = line last seen on right, -1 = left).
+// Mecanum mixer: drive an arbitrary (forward, strafe, yaw) velocity vector.
+// Wheel signs are taken from the library's own primitives — Advance() drives all
+// four forward, R_Move() runs (+UL, -LL, -UR, +LR), Turn_Right() runs
+// (+UL, +LL, -UR, -LR) — which gives:
+//   Upper_L = vy + vx + w      Upper_R = vy - vx - w
+//   Lower_L = vy - vx + w      Lower_R = vy + vx - w
+// vy is per-wheel so the existing forward-speed trim (WHEEL_SPEED_*) survives.
+// vx is positive to the right, w is positive clockwise.
+static void driveMecanum(int vyUL, int vyLL, int vyUR, int vyLR, int vx, int w) {
+  int ul = vyUL + vx + w;
+  int ll = vyLL - vx + w;
+  int ur = vyUR - vx - w;
+  int lr = vyLR + vx - w;
+  robot.Motor_Upper_L(ul >= 0, constrain(abs(ul), 0, 255));
+  robot.Motor_Lower_L(ll >= 0, constrain(abs(ll), 0, 255));
+  robot.Motor_Upper_R(ur >= 0, constrain(abs(ur), 0, 255));
+  robot.Motor_Lower_R(lr >= 0, constrain(abs(lr), 0, 255));
+}
+
+// Position of the line relative to the robot, from the 3 binary sensors.
+// Positive = line is off to the right, so the robot must move right to re-centre.
+// Reading the middle sensor together with the sides gives 5 levels instead of the
+// 3 the sides alone would — enough for a proportional correction.
+//   -2 = line under left sensor only      +2 = line under right sensor only
+//   -1 = line between left and middle     +1 = line between middle and right
+//    0 = centred, or straddling a crossing (both sides lit)
+static int8_t lineError(uint8_t SL, uint8_t SM, uint8_t SR) {
+  if (SL == HIGH && SR == HIGH) return 0;                 // crossing — hold the lane
+  if (SR == HIGH) return (SM == HIGH) ? +1 : +2;
+  if (SL == HIGH) return (SM == HIGH) ? -1 : -2;
+  return 0;                                               // middle only, or lost
+}
+
+// One steering step shared by every line-follower.
+//
+// Corrections strafe the chassis sideways back onto the line rather than pivoting
+// in place. The old version stopped dead and spun whenever the middle sensor fell
+// off the line, and because that spin ended when the *sensor* re-acquired the line
+// — while the sensor sits ahead of the centre of rotation — the *body* always
+// over-rotated past parallel, drove off the far edge, and spun back. That geometric
+// overshoot is what produced the zigzag, and no gain or tick tuning removes it.
+// Strafing has no such overshoot: lateral error is corrected without changing
+// heading at all. A small yaw term rides along to fix genuine heading error, and
+// forward speed is only reduced (never zeroed) while correcting.
+//
+// If the line is lost entirely, keep turning toward whichever side saw it last.
+// `lastSeenSide` is updated in place (+1 = line last seen on right, -1 = left).
 void steerAlongLine(uint8_t SL, uint8_t SM, uint8_t SR,
                     uint8_t upperL, uint8_t lowerL, uint8_t upperR, uint8_t lowerR, uint8_t turnSpeed,
                     int8_t &lastSeenSide) {
@@ -669,23 +720,21 @@ void steerAlongLine(uint8_t SL, uint8_t SM, uint8_t SR,
   static unsigned long lostSinceMs = 0;
   static int8_t lostSpinDir = 0;
 
-  if (SM == HIGH || (SL == HIGH && SR == HIGH)) {
+  bool lineVisible = (SL == HIGH || SM == HIGH || SR == HIGH);
+
+  if (lineVisible) {
     lostSinceMs = 0;
-    speed_Upper_L = upperL;
-    speed_Lower_L = lowerL;
-    speed_Upper_R = upperR;
-    speed_Lower_R = lowerR;
-    robot.Advance();
-  } else if (SL == LOW && SR == HIGH) {
-    lostSinceMs = 0;
-    lastSeenSide = +1;
-    speed_Upper_L = speed_Lower_L = speed_Upper_R = speed_Lower_R = turnSpeed;
-    robot.Turn_Right();
-  } else if (SR == LOW && SL == HIGH) {
-    lostSinceMs = 0;
-    lastSeenSide = -1;
-    speed_Upper_L = speed_Lower_L = speed_Upper_R = speed_Lower_R = turnSpeed;
-    robot.Turn_Left();
+    int8_t err = lineError(SL, SM, SR);
+    if (err > 0) lastSeenSide = +1;
+    else if (err < 0) lastSeenSide = -1;
+
+    int mag = abs(err);
+    int vx  = LINE_STRAFE_GAIN * err;   // strafe toward the line — the real correction
+    int w   = LINE_YAW_GAIN * err;      // gentle heading alignment, not a pivot
+    int cut = LINE_CORRECT_SLOWDOWN * mag;
+
+    driveMecanum(max(upperL - cut, 1), max(lowerL - cut, 1),
+                 max(upperR - cut, 1), max(lowerR - cut, 1), vx, w);
   } else {
     // Line fully lost. Spin toward lastSeenSide, but if that doesn't
     // reacquire it within LOST_LINE_FLIP_MS, flip direction instead of
@@ -712,7 +761,7 @@ void followLineWithTarget(int targetCount, uint8_t upperL, uint8_t lowerL, uint8
   unsigned long lastIRCheckMs = 0;
   int8_t lastSeenSide = +1; // +1 = line last seen on right, -1 = left
 
-  Serial.print("Basic line follow. Target lines: ");
+  Serial.print(F("Basic line follow. Target lines: "));
   Serial.println(targetCount);
 
   while (numLines < targetCount) {
@@ -731,13 +780,13 @@ void followLineWithTarget(int targetCount, uint8_t upperL, uint8_t lowerL, uint8
       if (!wasOnFullLine) {
         numLines++;
         wasOnFullLine = true;
-        Serial.print("Line crossed: ");
+        Serial.print(F("Line crossed: "));
         Serial.print(numLines);
-        Serial.print("/");
+        Serial.print(F("/"));
         Serial.println(targetCount);
         if (numLines >= targetCount) {
           robot.Stop();
-          Serial.println("Target reached.");
+          Serial.println(F("Target reached."));
           return;
         }
       }
@@ -816,7 +865,7 @@ uint16_t readUltrasonicMedian() {
 // ==========================================================================
 
 bool followLineWithDistance(uint8_t upperL, uint8_t lowerL, uint8_t upperR, uint8_t lowerR, uint8_t turnSpeed, uint16_t stopDistanceCm, uint8_t tickMs) {
-  Serial.println("Following line with distance check...");
+  Serial.println(F("Following line with distance check..."));
 
   unsigned long lastIRCheckMs      = 0;
   unsigned long lastDistanceSampleMs = millis() - ULTRASONIC_SAMPLE_MS;
@@ -839,11 +888,11 @@ bool followLineWithDistance(uint8_t upperL, uint8_t lowerL, uint8_t upperR, uint
       if (now - lastDistanceReportMs >= 250) {
         lastDistanceReportMs = now;
         if (distanceCm >= 999) {
-          Serial.println("Distance: out of range");
+          Serial.println(F("Distance: out of range"));
         } else {
-          Serial.print("Distance: ");
+          Serial.print(F("Distance: "));
           Serial.print(distanceCm);
-          Serial.println(" cm");
+          Serial.println(F(" cm"));
         }
       }
 
@@ -855,9 +904,9 @@ bool followLineWithDistance(uint8_t upperL, uint8_t lowerL, uint8_t upperR, uint
 
       if (closeReadCount >= ULTRASONIC_CONFIRM_READS) {
         robot.Stop();
-        Serial.print("Obstacle detected at ");
+        Serial.print(F("Obstacle detected at "));
         Serial.print(distanceCm);
-        Serial.println(" cm. Stopping.");
+        Serial.println(F(" cm. Stopping."));
         return true;
       }
     }
@@ -889,7 +938,7 @@ void moveSlowlyToObject() {
 // ==========================================================================
 
 bool searchAndCenterLine(uint16_t timeoutMs, int8_t initialLastSeenSide) {
-  Serial.println("Searching and centering on line...");
+  Serial.println(F("Searching and centering on line..."));
 
   const uint8_t CENTER_CONFIRM_TICKS = 5;
   uint8_t centeredTicks = 0;
@@ -912,7 +961,7 @@ bool searchAndCenterLine(uint16_t timeoutMs, int8_t initialLastSeenSide) {
 
     if (timeoutMs > 0 && millis() - startMs >= timeoutMs) {
       robot.Stop();
-      Serial.println("Search timeout. Line not found.");
+      Serial.println(F("Search timeout. Line not found."));
       return false;
     }
 
@@ -924,7 +973,7 @@ bool searchAndCenterLine(uint16_t timeoutMs, int8_t initialLastSeenSide) {
     if (!L && M && !R) {
       robot.Stop();
       if (++centeredTicks >= CENTER_CONFIRM_TICKS) {
-        Serial.println("Line found and centered.");
+        Serial.println(F("Line found and centered."));
         return true;
       }
       delay(TURN_TICK_MS);
@@ -1006,7 +1055,7 @@ bool searchAndCenterLine(uint16_t timeoutMs, int8_t initialLastSeenSide) {
 // in small steps until all 3 sensors read the line solidly again, confirming
 // for a few ticks to debounce noise, squaring the robot up before a drop.
 bool alignOnCrossLine(uint16_t timeoutMs) {
-  Serial.println("Aligning on cross line...");
+  Serial.println(F("Aligning on cross line..."));
 
   uint8_t confirmedTicks = 0;
   unsigned long startMs = millis();
@@ -1024,7 +1073,7 @@ bool alignOnCrossLine(uint16_t timeoutMs) {
     if (onCrossLine) {
       robot.Stop();
       if (++confirmedTicks >= ALIGN_CONFIRM_TICKS) {
-        Serial.println("Aligned on cross line.");
+        Serial.println(F("Aligned on cross line."));
         return true;
       }
     } else {
@@ -1038,7 +1087,7 @@ bool alignOnCrossLine(uint16_t timeoutMs) {
   }
 
   robot.Stop();
-  Serial.println("Align timeout — cross line not reacquired.");
+  Serial.println(F("Align timeout — cross line not reacquired."));
   return false;
 }
 
@@ -1062,20 +1111,20 @@ void openGripper(bool state) {
 int gripAndIdentifyColor(bool gOpen) {
   if (stopRequested()) return -1;
 
-  Serial.println("Checking TCS3200 color...");
+  Serial.println(F("Checking TCS3200 color..."));
   ColorLabel label = classifyColor();
 
   openGripper(gOpen);
   delay(1000);
 
   if (label == ColorLabel::Blue) {
-    Serial.println("Blue detected. Gripper closed at 180.");
+    Serial.println(F("Blue detected. Gripper closed at 180."));
     return 0;
   } else if (label == ColorLabel::Red) {
-    Serial.println("Red detected. Gripper closed at 180.");
+    Serial.println(F("Red detected. Gripper closed at 180."));
     return 1;
   } else {
-    Serial.println("Yellow detected. Gripper closed at 180.");
+    Serial.println(F("Yellow detected. Gripper closed at 180."));
     return 2;
   }
 }
@@ -1294,7 +1343,7 @@ void runCommandKey(int key, const char* source) {
       path3();
       if (stopRequested()) break;
       robot.Stop();
-      Serial.println("Done.");
+      Serial.println(F("Done."));
       actionLog("Done.");
       break;
     }
@@ -1337,7 +1386,7 @@ void runCommandKey(int key, const char* source) {
     // }
 
     // case 74: // Test for ultrasonic sensor
-    //   Serial.println("Ultrasonic reading started...");
+    //   Serial.println(F("Ultrasonic reading started..."));
     //   while (IRreceive.getKey() != 70) {
     //     logEsp32Messages();
     //     if (pendingEspKey == 70 || pendingEspKey == STOP_KEY) {
@@ -1347,15 +1396,15 @@ void runCommandKey(int key, const char* source) {
 
     //     uint16_t dist = readUltrasonic();
     //     if (dist >= 999)
-    //       Serial.println("Distance: out of range");
+    //       Serial.println(F("Distance: out of range"));
     //     else {
-    //       Serial.print("Distance: ");
+    //       Serial.print(F("Distance: "));
     //       Serial.print(dist);
-    //       Serial.println(" cm");
+    //       Serial.println(F(" cm"));
     //     }
     //     delay(250);
     //   }
-    //   Serial.println("Ultrasonic stopped.");
+    //   Serial.println(F("Ultrasonic stopped."));
     //   break;
 
     // case 28: // test run robot
@@ -1393,7 +1442,7 @@ void setup() {
   if (wifiConnected) statusLedOffAtMs = millis() + 2000;
   servo.attach(SERVO_PIN);
   servo.write(gripperAngle);
-  Serial.println("Ready. Press IR to start.");
+  Serial.println(F("Ready. Press IR to start."));
 }
 
 void loop() {
