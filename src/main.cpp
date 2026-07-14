@@ -460,9 +460,9 @@ bool rotate90Left(uint8_t turnSpeed, uint16_t timeoutMs) {
     uint8_t SL = digitalRead(LINE_LEFT_PIN);
 
     if (millis() - startMs >= ROTATE_SENSOR_GRACE_MS && SL == HIGH) {
-      brakePulse(&mecanumCar::Turn_Right);   // cancel spin momentum before centering
+      brakePulse(&mecanumCar::Turn_Right);   // cancel spin momentum
       Serial.println(F("Left sensor detected line."));
-      return searchAndCenterLine(1500, -1);
+      return true;
     }
 
     robot.Turn_Left();
@@ -815,7 +815,6 @@ void path2() {
   moveShort(300);
   delay(500);
   if (!rotate90Left()) return;
-  moveShort(300);
   delay(1000);
   followLineWithTarget(2);
   delay(500);
