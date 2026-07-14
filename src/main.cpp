@@ -126,6 +126,7 @@ bool       waitOrStop(uint16_t ms);
 void       logEsp32Messages();
 void       handleEsp32Line(String line);
 void       actionLog(const char* message);
+void       actionLog(const __FlashStringHelper* message);
 bool       connectEsp32Wifi();
 bool       runArmCommand(const char* command, const char* okResponse, const char* failResponse);
 bool       fetchRed();
@@ -280,6 +281,15 @@ void logEsp32Messages() {
 }
 
 void actionLog(const char* message) {
+  Serial.print(F("action: "));
+  Serial.println(message);
+  espSerial.listen();
+  espSerial.print(F("ACTION_LOG "));
+  espSerial.println(message);
+  espSerial.flush();
+}
+
+void actionLog(const __FlashStringHelper* message) {
   Serial.print(F("action: "));
   Serial.println(message);
   espSerial.listen();
@@ -1154,6 +1164,7 @@ bool returnToCheckpoint() {
 // release it, signal the arm which colour it was, then return to the checkpoint.
 void path1() {
   // ── Phase 1: approach the object, grip & identify its colour ──
+  actionLog(F("challenge3: Path 1 - approaching object"));
   followLineWithDistance();
   if (stopAll) return;
   int colorRes = gripAndIdentifyColor(isGripperOpen);
@@ -1162,6 +1173,7 @@ void path1() {
   isGripperOpen = !isGripperOpen;
 
   // ── Phase 2: turn around onto the drop lane ──
+  actionLog(F("challenge3: Path 1 - turning to drop lane"));
   // METHOD A — two discrete 90° turns. Uncomment this block and comment out METHOD B.
   // if (!rotate90()) return;
   // delay(500);
@@ -1182,6 +1194,7 @@ void path1() {
   if (!searchAndCenterLine()) return;
 
   // ── Phase 3: drive to the drop zone and release the object ──
+  actionLog(F("challenge3: Path 1 - delivering object"));
   followLineWithTarget(5);
   delay(1000);
   moveSlowly(2);
@@ -1192,6 +1205,7 @@ void path1() {
   isGripperOpen = !isGripperOpen;
 
   // ── Phase 4: signal the arm, then return to the checkpoint ──
+  actionLog(F("challenge3: Path 1 - returning to checkpoint"));
   sendArmCommand(colorRes);
   if (!returnToCheckpoint()) return;
   if (!searchAndCenterLine()) return;
@@ -1201,6 +1215,7 @@ void path1() {
 // it to the drop zone (mirror of path3; distances are hand-tuned per side).
 void path2() {
   // ── Phase 1: turn onto the object lane (left, then in) ──
+  actionLog(F("challenge3: Path 2 - entering left branch"));
   followLineWithTarget(2);
   delay(1000);
   moveShort(200);
@@ -1224,6 +1239,7 @@ void path2() {
   // if (!searchAndCenterLine()) return;
 
   // ── Phase 2: approach the object, grip & identify its colour ──
+  actionLog(F("challenge3: Path 2 - approaching object"));
   followLineWithDistance();
   delay(500);
   int colorRes = gripAndIdentifyColor(isGripperOpen);
@@ -1234,6 +1250,7 @@ void path2() {
   delay(1000);
 
   // ── Phase 3: back off and navigate to the drop lane ──
+  actionLog(F("challenge3: Path 2 - navigating to drop lane"));
   reverseShort(100);
   delay(500);
   if (!rotate90()) return;
@@ -1245,6 +1262,7 @@ void path2() {
   if (!rotate90()) return;
 
   // ── Phase 4: final approach and release the object ──
+  actionLog(F("challenge3: Path 2 - delivering object"));
   followLineWithTarget(5);
   delay(1000);
   moveSlowly(3);
@@ -1255,6 +1273,7 @@ void path2() {
   isGripperOpen = !isGripperOpen;
 
   // ── Phase 5: return to the checkpoint ──
+  actionLog(F("challenge3: Path 2 - returning to checkpoint"));
   if (!returnToCheckpoint()) return;
   if (!searchAndCenterLine()) return;
 }
@@ -1263,6 +1282,7 @@ void path2() {
 // branch and brings it to the drop zone (hand-tuned distances differ from path2).
 void path3() {
   // ── Phase 1: turn onto the object lane (right, then in) ──
+  actionLog(F("challenge3: Path 3 - entering right branch"));
   followLineWithTarget(3);
   delay(500);
   moveShort(150);
@@ -1277,6 +1297,7 @@ void path3() {
   delay(500);
 
   // ── Phase 2: approach the object, grip & identify its colour ──
+  actionLog(F("challenge3: Path 3 - approaching object"));
   followLineWithDistance();
   if (stopAll) return;
 
@@ -1286,6 +1307,7 @@ void path3() {
   isGripperOpen = !isGripperOpen;
 
   // ── Phase 3: back off and navigate to the drop lane ──
+  actionLog(F("challenge3: Path 3 - navigating to drop lane"));
   reverseShort(150);
   delay(500);
   if (!rotate90Left()) return;
@@ -1297,6 +1319,7 @@ void path3() {
   if (!rotate90Left()) return;
 
   // ── Phase 4: final approach and release the object ──
+  actionLog(F("challenge3: Path 3 - delivering object"));
   if (!searchAndCenterLine()) return;
   followLineWithTarget(4);
   delay(1000);
@@ -1307,6 +1330,7 @@ void path3() {
   delay(5000);
   isGripperOpen = !isGripperOpen;
   // ── Phase 5: return to the checkpoint ──
+  actionLog(F("challenge3: Path 3 - returning to checkpoint"));
   if (!returnToCheckpoint()) return;
 }
 
@@ -1336,6 +1360,7 @@ void runCommandKey(int key, const char* source) {
     //   break;
 
     case 13: { // challenge 3
+      actionLog(F("challenge3: Starting Challenge 3"));
       path1();
       if (stopRequested() || waitOrStop(1000)) break;
       path2();
@@ -1358,9 +1383,9 @@ void runCommandKey(int key, const char* source) {
     //   followLineWithDistance();
     //   break;
 
-    // case 70: // front button / stop everything
-    //   stopEverything();
-    //   break;
+    case 70: // front button / stop everything
+      stopEverything();
+      break;
 
     // case 12: // number 4
     //   path2();
