@@ -300,9 +300,9 @@ void connectFavoriot() {
   String topic = rpcTopic();
   report("MQTT_CONNECTING");
   if (mqtt.connect(clientId.c_str(), DEVICE_ACCESS_TOKEN, DEVICE_ACCESS_TOKEN,
-                   topic.c_str(), 0, true, OFFLINE_PRESENCE)) {
+                   topic.c_str(), 0, false, OFFLINE_PRESENCE)) {
     mqtt.subscribe(topic.c_str());
-    mqtt.publish(topic.c_str(), ONLINE_PRESENCE, true);
+    mqtt.publish(topic.c_str(), ONLINE_PRESENCE, false);
     if (!onlineAnnounced) {
       publishFavoriot("status", "online");
       onlineAnnounced = true;
