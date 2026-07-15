@@ -22,9 +22,6 @@ const char* ONLINE_PRESENCE = "{\"to\":\"frontend\",\"type\":\"presence\",\"onli
 const char* OFFLINE_PRESENCE = "{\"to\":\"frontend\",\"type\":\"presence\",\"online\":false}";
 
 uint32_t nextArmRequestId = 1;
-uint32_t lastArmResultId = 0;
-bool lastArmResultOk = false;
-String queuedColor;
 uint32_t activeChallengeId = 0;
 uint32_t forwardedCommandId = 0;
 long forwardedCommandKey = -1;
@@ -105,36 +102,20 @@ String readJsonString(const String& message, const char* key) {
   return end < 0 ? "" : message.substring(start + 1, end);
 }
 
-bool publishArmCommand(const char* color, uint32_t id) {
+bool publishTaggingRequest(uint32_t id) {
   if (!mqtt.connected()) return false;
 
-  char payload[80];
-  snprintf(payload, sizeof(payload), "{\"to\":\"arm\",\"command\":\"%s\",\"id\":%lu}",
-           color, (unsigned long)id);
+  char payload[72];
+  snprintf(payload, sizeof(payload),
+           "{\"to\":\"arm\",\"command\":\"check_tagging\",\"id\":%lu}",
+           (unsigned long)id);
   return mqtt.publish(rpcTopic().c_str(), payload);
 }
 
-bool waitForArmResult(uint32_t id, uint32_t timeoutMs = 15000) {
-  unsigned long startMs = millis();
-  while (millis() - startMs < timeoutMs) {
-    connectFavoriot();
-    mqtt.loop();
-    if (lastArmResultId == id) return lastArmResultOk;
-    delay(10);
-  }
-  return false;
-}
-
-bool runColor(const char* color) {
+void runTagging() {
   connectFavoriot();
   uint32_t id = nextArmRequestId++;
-  lastArmResultId = 0;
-  bool ok = publishArmCommand(color, id) && waitForArmResult(id);
-
-  char result[24];
-  snprintf(result, sizeof(result), "%s_%s", color, ok ? "ok" : "fail");
-  publishFavoriot("arm", result);
-  return ok;
+  if (!publishTaggingRequest(id)) unoSerial.println("TAGGING_FAILED mqtt_unavailable");
 }
 
 long readCommandKey(const String& message) {
@@ -163,25 +144,9 @@ long readCommandKey(const String& message) {
   return -1;
 }
 
-bool fetchRed() {
-  return runColor("red");
-}
-
-bool fetchBlue() {
-  return runColor("blue");
-}
-
-bool fetchYellow() {
-  return runColor("yellow");
-}
-
 void handleUnoCommand(const String& command) {
-  if (command == "RUN_RED") {
-    report(fetchRed() ? "ARM_RED_OK" : "ARM_RED_FAIL");
-  } else if (command == "RUN_BLUE") {
-    report(fetchBlue() ? "ARM_BLUE_OK" : "ARM_BLUE_FAIL");
-  } else if (command == "RUN_YELLOW") {
-    report(fetchYellow() ? "ARM_YELLOW_OK" : "ARM_YELLOW_FAIL");
+  if (command == "CHECK_TAGGING") {
+    runTagging();
   } else if (command.startsWith("ACTION_LOG ")) {
     String message = command.substring(11);
     actionLog(message.c_str());
@@ -200,12 +165,19 @@ void handleFavoriotMessage(char* topic, byte* payload, unsigned int length) {
   message.toLowerCase();
   Serial.printf("Favoriot %s: %s\n", topic, message.c_str());
 
-  if (message.indexOf("\"to\":\"mecanum\"") >= 0 &&
-      (message.indexOf("_ok") >= 0 || message.indexOf("_fail") >= 0)) {
-    long id = readJsonLong(message, "\"id\"");
-    if (id >= 0) {
-      lastArmResultId = (uint32_t)id;
-      lastArmResultOk = message.indexOf("_ok") >= 0;
+  if (readJsonString(message, "\"to\"") == "mecanum" &&
+      readJsonString(message, "\"type\"") == "tagging_result") {
+    String status = readJsonString(message, "\"status\"");
+    if (status == "started") {
+      String color = readJsonString(message, "\"color\"");
+      color.toUpperCase();
+      unoSerial.print("TAGGING_STARTED ");
+      unoSerial.print(readJsonLong(message, "\"tag\""));
+      unoSerial.print(' ');
+      unoSerial.println(color);
+    } else {
+      unoSerial.print("TAGGING_FAILED ");
+      unoSerial.println(status);
     }
     return;
   }
@@ -243,9 +215,6 @@ void handleFavoriotMessage(char* topic, byte* payload, unsigned int length) {
     return;
   }
 
-  if (message.indexOf("red") >= 0) queuedColor = "red";
-  else if (message.indexOf("blue") >= 0) queuedColor = "blue";
-  else if (message.indexOf("yellow") >= 0) queuedColor = "yellow";
 }
 
 void readUnoCommands() {
@@ -337,11 +306,5 @@ void loop() {
 
   connectFavoriot();
   mqtt.loop();
-
-  if (queuedColor.length() > 0) {
-    String color = queuedColor;
-    queuedColor = "";
-    runColor(color.c_str());
-  }
 
 }

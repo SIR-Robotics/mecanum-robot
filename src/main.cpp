@@ -115,7 +115,7 @@ void       logEsp32Messages();
 void       handleEsp32Line(String line);
 void       actionLog(const char* message);
 void       actionLog(const __FlashStringHelper* message);
-void       sendArmCommand(ColorLabel color);
+void       checkTagging();
 
 void       brakePulse(void (mecanumCar::*counterMove)());
 bool       moveShort(uint16_t durationMs = 300);
@@ -321,17 +321,11 @@ void actionLog(const __FlashStringHelper* message) {
   espSerial.flush();
 }
 
-void sendArmCommand(ColorLabel color) {
-  const char* command = nullptr;
-  if (color == ColorLabel::Blue) command = "RUN_BLUE";
-  else if (color == ColorLabel::Red) command = "RUN_RED";
-  else if (color == ColorLabel::Yellow) command = "RUN_YELLOW";
-  if (!command) return;
-
+void checkTagging() {
   while (espSerial.available()) espSerial.read();
-  Serial.println(command);
+  Serial.println(F("Requesting HuskyLens tagging..."));
   espSerial.listen();
-  espSerial.println(command);
+  espSerial.println(F("CHECK_TAGGING"));
   espSerial.flush();
 }
 
@@ -814,7 +808,7 @@ bool returnToCheckpoint() {
 // ==========================================================================
 
 // path1 — pick up the object straight ahead, ferry it to the drop lane,
-// release it, signal the arm which colour it was, then return to the checkpoint.
+// release it, request arm tagging, then return to the checkpoint.
 bool path1(ColorLabel* detectedColor, ColorLabel target) {
   // ── Phase 1: approach the object, grip & identify its colour ──
   actionLog(F("challenge3: Path 1 - approaching object"));
@@ -859,10 +853,10 @@ bool path1(ColorLabel* detectedColor, ColorLabel target) {
     isGripperOpen = !isGripperOpen;
   }
 
-  // ── Phase 4: signal the arm, then return to the checkpoint ──
+  // ── Phase 4: return to the checkpoint ──
   actionLog(F("challenge3: Path 1 - returning to checkpoint"));
-  if (picked) sendArmCommand(colorRes);
   if (!returnToCheckpoint()) return false;
+  if (picked) checkTagging();
   if (detectedColor) *detectedColor = colorRes;
   return true;
 }
@@ -927,7 +921,7 @@ bool path2(ColorLabel* detectedColor, ColorLabel target) {
   // ── Phase 5: return to the checkpoint ──
   actionLog(F("challenge3: Path 2 - returning to checkpoint"));
   if (!returnToCheckpoint()) return false;
-  if (!searchAndCenterLine()) return false;
+  if (picked) checkTagging();
   if (detectedColor) *detectedColor = colorRes;
   return true;
 }
@@ -978,7 +972,6 @@ bool path3(ColorLabel* detectedColor, ColorLabel target) {
   // ── Phase 4: final approach and release the object ──
   actionLog(picked ? F("challenge3: Path 3 - delivering object")
                    : F("challenge3: Path 3 - skipping non-target object"));
-  if (!searchAndCenterLine()) return false;
   followLineWithTarget(4);
   delay(1000);
   moveSlowly(2);
@@ -992,6 +985,7 @@ bool path3(ColorLabel* detectedColor, ColorLabel target) {
   // ── Phase 5: return to the checkpoint ──
   actionLog(F("challenge3: Path 3 - returning to checkpoint"));
   if (!returnToCheckpoint()) return false;
+  if (picked) checkTagging();
   if (detectedColor) *detectedColor = colorRes;
   return true;
 }
