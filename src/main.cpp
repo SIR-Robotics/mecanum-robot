@@ -39,6 +39,7 @@ const uint8_t  DRIVE_SPEED   = 41;   // forward speed while following a line
 const uint8_t  TURN_SPEED    = 50;   // in-place spin speed (rotate90 / searching)
 const uint8_t  TURN_SPEED_180 = 40;  // 180 spins twice as far and builds twice the momentum, so it coasts past the line at full TURN_SPEED — spin it slower
 const uint8_t  SLOW_SPEED    = 35;   // final approach to a block / drop
+const uint8_t  SLOW_APPROACH_SPEED = 33;  // creep speed once the ultrasonic sees an object, separate from SLOW_SPEED so it can be tuned independently
 
 // Instructor's line follower adds 10 PWM while correcting. Tune this if the
 // robot turns too sharply or too slowly while recovering the middle sensor.
@@ -657,7 +658,7 @@ void followLineWithDistance() {
 }
 
 void moveSlowlyToObject() {
-  driveUntilObstacle(OBSTACLE_DISTANCE_CM, SLOW_SPEED);
+  driveUntilObstacle(OBSTACLE_DISTANCE_CM, SLOW_APPROACH_SPEED);
 }
 
 // ==========================================================================
@@ -851,7 +852,7 @@ bool path1(ColorLabel* detectedColor, ColorLabel target) {
   delay(1000);
   moveSlowly(2);
   delay(1000);
-  alignOnCrossLine();
+  // alignOnCrossLine();
   if (picked) {
     openGripper(isGripperOpen);
     delay(5000);
@@ -916,7 +917,7 @@ bool path2(ColorLabel* detectedColor, ColorLabel target) {
   delay(1000);
   moveSlowly(2);
   delay(1000);
-  alignOnCrossLine();
+  // alignOnCrossLine();
   if (picked) {
     openGripper(isGripperOpen);
     delay(5000);
@@ -982,7 +983,7 @@ bool path3(ColorLabel* detectedColor, ColorLabel target) {
   delay(1000);
   moveSlowly(2);
   delay(1000);
-  alignOnCrossLine();
+  // alignOnCrossLine();
   if (picked) {
     openGripper(isGripperOpen);
     delay(5000);
