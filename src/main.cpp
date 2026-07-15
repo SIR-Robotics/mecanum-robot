@@ -1029,6 +1029,13 @@ void runColorFinder(ColorLabel target) {
 void runCommandKey(int key, const char* source) {
   if (key == -1) return;
 
+  if (key == 22) {
+    Serial.println(F("Color checker: reading 3 samples..."));
+    Serial.print(F("Color checker result: "));
+    Serial.println(colorName(classifyColor()));
+    return;
+  }
+
   char logMessage[40];
   snprintf(logMessage, sizeof(logMessage), "%s key %d", source, key);
   actionLog(logMessage);
