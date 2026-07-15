@@ -28,6 +28,7 @@ String queuedColor;
 uint32_t activeChallengeId = 0;
 uint32_t forwardedCommandId = 0;
 long forwardedCommandKey = -1;
+bool onlineAnnounced = false;
 
 void connectFavoriot();
 
@@ -90,6 +91,18 @@ long readJsonLong(const String& message, const char* key) {
   if (colon < 0) return -1;
 
   return message.substring(colon + 1).toInt();
+}
+
+String readJsonString(const String& message, const char* key) {
+  int keyPos = message.indexOf(key);
+  if (keyPos < 0) return "";
+
+  int colon = message.indexOf(':', keyPos);
+  int start = message.indexOf('"', colon + 1);
+  if (colon < 0 || start < 0) return "";
+
+  int end = message.indexOf('"', start + 1);
+  return end < 0 ? "" : message.substring(start + 1, end);
 }
 
 bool publishArmCommand(const char* color, uint32_t id) {
@@ -200,6 +213,21 @@ void handleFavoriotMessage(char* topic, byte* payload, unsigned int length) {
   if (message.indexOf("\"to\":\"arm\"") >= 0) return;
   if (message.indexOf("\"to\":\"frontend\"") >= 0) return;
 
+  if (readJsonString(message, "\"to\"") == "mecanum" &&
+      readJsonString(message, "\"command\"") == "find_color") {
+    String color = readJsonString(message, "\"color\"");
+    if (color != "red" && color != "blue" && color != "yellow") {
+      publishFavoriot("status", "FIND_COLOR_INVALID");
+      return;
+    }
+
+    color.toUpperCase();
+    unoSerial.print("FIND_COLOR ");
+    unoSerial.println(color);
+    publishFavoriot("command", "find_color_sent");
+    return;
+  }
+
   long key = readCommandKey(message);
   if (key >= 0) {
     long id = readJsonLong(message, "\"id\"");
@@ -275,6 +303,10 @@ void connectFavoriot() {
                    topic.c_str(), 0, true, OFFLINE_PRESENCE)) {
     mqtt.subscribe(topic.c_str());
     mqtt.publish(topic.c_str(), ONLINE_PRESENCE, true);
+    if (!onlineAnnounced) {
+      publishFavoriot("status", "online");
+      onlineAnnounced = true;
+    }
     Serial.println("Device connected");
     Serial.print("WIFI_CONNECTED ");
     Serial.println(WiFi.localIP());
