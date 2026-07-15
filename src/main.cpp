@@ -5,13 +5,11 @@
 #include <Arduino.h>
 #include <MecanumCar_v2.h>
 #include "ir.h"
-#include <Servo.h>
 #include <avr/interrupt.h>
 #include <SoftwareSerial.h>
 
 mecanumCar robot(3, 2);
 IR IRreceive(A3);
-Servo servo;
 SoftwareSerial espSerial(10, 11); // Uno RX, TX
 
 const uint8_t LINE_LEFT_PIN   = A0;
@@ -57,9 +55,11 @@ const uint32_t ULTRASONIC_TIMEOUT_US = 12000;
 const uint8_t  ULTRASONIC_CONFIRM_READS = 3;
 const uint8_t  ULTRASONIC_STOP_HYSTERESIS_CM = 2;
 
-const uint8_t  GRIPPER_OPEN_ANGLE   = 2;
+const uint8_t  GRIPPER_OPEN_ANGLE   = 40;
 const uint8_t  GRIPPER_CLOSE_ANGLE  = 180;
 const uint8_t  GRIPPER_STEP_DELAY_MS = 10;
+
+static_assert(SERVO_PIN == 9, "Timer1 servo output requires Arduino Uno pin 9");
 
 
 
@@ -81,8 +81,6 @@ bool          wasOnFullLine   = false;
 bool          stopAll         = false;
 unsigned long statusLedOffAtMs = 0;
 int           pendingEspKey   = -1;
-
-const uint8_t  STOP_KEY             = 64;
 
 // ==========================================================================
 //  DATA TYPES
@@ -230,13 +228,13 @@ void stopEverything() {
 bool stopRequested() {
   if (stopAll) return true;
   logEsp32Messages();
-  if (pendingEspKey == STOP_KEY || pendingEspKey == 70) {
+  if (pendingEspKey == 70) {
     pendingEspKey = -1;
     actionLog("force stop");
     stopEverything();
     return true;
   }
-  if (IRreceive.getKey() == STOP_KEY) {
+  if (IRreceive.getKey() == 70) {
     stopEverything();
     return true;
   }
@@ -746,13 +744,17 @@ bool alignOnCrossLine(uint16_t timeoutMs) {
 //  GRIPPER
 // ==========================================================================
 
+void writeGripperAngle(uint8_t angle) {
+  OCR1A = (uint16_t)map(angle, 0, 180, 544, 2400) * 2;
+}
+
 void openGripper(bool state) {
   uint8_t targetAngle = state ? GRIPPER_CLOSE_ANGLE : GRIPPER_OPEN_ANGLE;
 
   while (gripperAngle != targetAngle) {
     if (stopRequested()) return;
     gripperAngle += gripperAngle < targetAngle ? 1 : -1;
-    servo.write(gripperAngle);
+    writeGripperAngle(gripperAngle);
     delay(GRIPPER_STEP_DELAY_MS);
   }
 
@@ -1037,7 +1039,7 @@ void runCommandKey(int key, const char* source) {
 
   // A fresh command key re-arms the robot after an emergency stop. The stop
   // buttons are excluded so they never clear their own flag.
-  if (key != 70 && key != STOP_KEY) {
+  if (key != 70) {
     stopAll = false;
   }
 
@@ -1064,6 +1066,12 @@ void runCommandKey(int key, const char* source) {
       moveForwardWheelSpeeds(DRIVE_SPEED, DRIVE_SPEED, DRIVE_SPEED, DRIVE_SPEED);
       break;
 
+    case 64: // OK — toggle gripper
+      openGripper(isGripperOpen);
+      isGripperOpen = !isGripperOpen;
+      Serial.println("Check gripper");
+      break;
+
     default:
       break;
   }
@@ -1085,8 +1093,11 @@ void setup() {
   Serial.begin(9600);
   espSerial.begin(9600);
   robot.Init();
-  servo.attach(SERVO_PIN);
-  servo.write(gripperAngle);
+  pinMode(SERVO_PIN, OUTPUT);
+  ICR1 = 40000; // 20 ms at 16 MHz with an 8x prescaler
+  writeGripperAngle(gripperAngle);
+  TCCR1A = _BV(COM1A1) | _BV(WGM11);
+  TCCR1B = _BV(WGM13) | _BV(WGM12) | _BV(CS11);
   // The ESP32 is not waited for: it reports WIFI/MQTT status on its own schedule
   // and loop() picks it up via logEsp32Messages(). Blocking setup() on it just
   // delayed the robot becoming IR-responsive.
