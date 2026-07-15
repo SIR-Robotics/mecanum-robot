@@ -58,8 +58,8 @@ const uint32_t ULTRASONIC_TIMEOUT_US = 12000;
 const uint8_t  ULTRASONIC_CONFIRM_READS = 3;
 const uint8_t  ULTRASONIC_STOP_HYSTERESIS_CM = 2;
 
-const uint8_t  GRIPPER_OPEN_ANGLE   = 40;
-const uint8_t  GRIPPER_CLOSE_ANGLE  = 180;
+const uint8_t  GRIPPER_OPEN_ANGLE   = 4;
+const uint8_t  GRIPPER_CLOSE_ANGLE  = 80;
 const uint8_t  GRIPPER_STEP_DELAY_MS = 10;
 
 static_assert(SERVO_PIN == 9, "Timer1 servo output requires Arduino Uno pin 9");
@@ -915,12 +915,12 @@ bool path1(ColorLabel* detectedColor, ColorLabel target) {
     openGripper(isGripperOpen);
     delay(5000);
     isGripperOpen = !isGripperOpen;
+    checkTagging();
   }
 
   // ── Phase 4: return to the checkpoint ──
   actionLog(F("challenge3: Path 1 - returning to checkpoint"));
   if (!returnToCheckpoint()) return false;
-  if (picked) checkTagging();
   if (detectedColor) *detectedColor = colorRes;
   return true;
 }
@@ -980,12 +980,12 @@ bool path2(ColorLabel* detectedColor, ColorLabel target) {
     openGripper(isGripperOpen);
     delay(5000);
     isGripperOpen = !isGripperOpen;
+    checkTagging();
   }
 
   // ── Phase 5: return to the checkpoint ──
   actionLog(F("challenge3: Path 2 - returning to checkpoint"));
   if (!returnToCheckpoint()) return false;
-  if (picked) checkTagging();
   if (detectedColor) *detectedColor = colorRes;
   return true;
 }
@@ -1045,11 +1045,11 @@ bool path3(ColorLabel* detectedColor, ColorLabel target) {
     openGripper(isGripperOpen);
     delay(5000);
     isGripperOpen = !isGripperOpen;
+    checkTagging();
   }
   // ── Phase 5: return to the checkpoint ──
   actionLog(F("challenge3: Path 3 - returning to checkpoint"));
   if (!returnToCheckpoint()) return false;
-  if (picked) checkTagging();
   if (detectedColor) *detectedColor = colorRes;
   return true;
 }
