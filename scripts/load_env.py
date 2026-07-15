@@ -7,7 +7,9 @@ keys = {
     "ACCESS_TOKEN": "DEVICE_ACCESS_TOKEN",
     "DEVICE_DEVELOPER_ID": "DEVICE_DEVELOPER_ID",
     "DEVICE_ACCESS_TOKEN": "DEVICE_ACCESS_TOKEN",
+    "DASHBOARD_BACKEND_HOST": "DASHBOARD_BACKEND_HOST",
 }
+numeric_keys = {"DASHBOARD_BACKEND_PORT"}
 env_file = Path(env["PROJECT_DIR"]) / ".env"
 found = set()
 
@@ -25,6 +27,8 @@ if env_file.exists():
             define = keys[key]
             flags.append(f'-D{define}=\\"{value}\\"')
             found.add(define)
+        elif key in numeric_keys:
+            flags.append(f"-D{key}={value}")
 
     env.Append(BUILD_FLAGS=flags)
 

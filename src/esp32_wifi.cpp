@@ -4,6 +4,15 @@
 #include <Arduino.h>
 #include <PubSubClient.h>
 #include <WiFi.h>
+#include <WebSocketsClient.h>
+
+#ifndef DASHBOARD_BACKEND_HOST
+#define DASHBOARD_BACKEND_HOST ""
+#endif
+
+#ifndef DASHBOARD_BACKEND_PORT
+#define DASHBOARD_BACKEND_PORT 3001
+#endif
 
 const char* WIFI_SSID = "ASEM Training";
 const char* WIFI_PASS = "Class@Asem";
@@ -14,6 +23,7 @@ const uint16_t MQTT_PORT = 1883;
 HardwareSerial unoSerial(2);
 WiFiClient wifiClient;
 PubSubClient mqtt(wifiClient);
+WebSocketsClient dashboardSocket;
 
 const uint8_t UNO_RX_PIN = 16;
 const uint8_t UNO_TX_PIN = 17;
@@ -158,6 +168,14 @@ void handleUnoCommand(const String& command) {
       publishFrontend("completed", activeChallengeId);
       activeChallengeId = 0;
     }
+  } else if (command.startsWith("DISTANCE_CM ") && dashboardSocket.isConnected()) {
+    long distanceCm = command.substring(12).toInt();
+    if ((distanceCm >= 0 && distanceCm <= 206) || distanceCm == 999) {
+      String payload = distanceCm == 999
+        ? "{\"distanceCm\":null}"
+        : "{\"distanceCm\":" + String(distanceCm) + "}";
+      dashboardSocket.sendTXT(payload);
+    }
   }
 }
 
@@ -298,6 +316,12 @@ void setup() {
   mqtt.setServer(MQTT_HOST, MQTT_PORT);
   mqtt.setCallback(handleFavoriotMessage);
   connectWifi();
+  if (DASHBOARD_BACKEND_HOST[0] != '\0') {
+    dashboardSocket.begin(DASHBOARD_BACKEND_HOST, DASHBOARD_BACKEND_PORT, "/ws/distance");
+    dashboardSocket.setReconnectInterval(2000);
+  } else {
+    Serial.println("DASHBOARD_WS_NOT_CONFIGURED");
+  }
   connectFavoriot();
 }
 
@@ -311,5 +335,6 @@ void loop() {
 
   connectFavoriot();
   mqtt.loop();
+  dashboardSocket.loop();
 
 }

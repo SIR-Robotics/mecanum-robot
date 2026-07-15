@@ -48,9 +48,10 @@ const uint8_t  TURN_TICK_MS  = 12;   // turn / positioning loop tick
 const uint16_t ROTATE_SENSOR_GRACE_MS = 200;  // ignore the sensors this long after a spin starts
 const uint16_t BRAKE_MS = 40;                 // counter-pulse to cancel spin momentum — shorter now that the robot moves slower and carries less of it (too long = kicks back the other way)
 
-const uint16_t OBSTACLE_DISTANCE_CM = 7;
+const uint16_t OBSTACLE_DISTANCE_CM = 8;
 const uint16_t APPROACH_DISTANCE_CM = 30;  // switch to the slow creep this far out — raise to start slowing earlier
 const uint16_t ULTRASONIC_SAMPLE_MS = 50;
+const uint16_t DISTANCE_REPORT_MS = 500;
 const uint32_t ULTRASONIC_TIMEOUT_US = 12000;
 const uint8_t  ULTRASONIC_CONFIRM_READS = 3;
 const uint8_t  ULTRASONIC_STOP_HYSTERESIS_CM = 2;
@@ -616,6 +617,11 @@ uint16_t readUltrasonicMedian() {
   return b;
 }
 
+static void reportDistance(uint16_t distanceCm) {
+  espSerial.print(F("DISTANCE_CM "));
+  espSerial.println(distanceCm);
+}
+
 // ==========================================================================
 //  DRIVE UNTIL OBSTACLE
 // ==========================================================================
@@ -625,6 +631,8 @@ static bool driveUntilObstacle(uint16_t stopDistanceCm, uint8_t speed) {
   Serial.println(F("Driving until obstacle..."));
 
   unsigned long lastDistanceSampleMs = millis() - ULTRASONIC_SAMPLE_MS;
+  unsigned long lastDistanceReportMs = 0;
+  bool hasReportedDistance = false;
   uint8_t closeReadCount = 0;
 
   while (true) {
@@ -634,11 +642,20 @@ static bool driveUntilObstacle(uint16_t stopDistanceCm, uint8_t speed) {
     if (now - lastDistanceSampleMs >= ULTRASONIC_SAMPLE_MS) {
       lastDistanceSampleMs = now;
       uint16_t distanceCm = readUltrasonicMedian();
+      bool reportedThisSample = false;
+
+      if (!hasReportedDistance || now - lastDistanceReportMs >= DISTANCE_REPORT_MS) {
+        reportDistance(distanceCm);
+        lastDistanceReportMs = now;
+        hasReportedDistance = true;
+        reportedThisSample = true;
+      }
 
       if (distanceCm <= stopDistanceCm) closeReadCount++;
       else if (distanceCm > stopDistanceCm + ULTRASONIC_STOP_HYSTERESIS_CM) closeReadCount = 0;
 
       if (closeReadCount >= ULTRASONIC_CONFIRM_READS) {
+        if (!reportedThisSample) reportDistance(distanceCm);
         robot.Stop();
         Serial.print(F("Obstacle at "));
         Serial.print(distanceCm);
@@ -1116,6 +1133,8 @@ void setup() {
 }
 
 void loop() {
+  static unsigned long lastIdleDistanceReportMs = millis() - DISTANCE_REPORT_MS;
+
   logEsp32Messages();
 
   // init success
@@ -1135,5 +1154,11 @@ void loop() {
     runColorFinder(target);
   } else {
     runCommandKey(IRreceive.getKey(), "ir");
+  }
+
+  unsigned long now = millis();
+  if (now - lastIdleDistanceReportMs >= DISTANCE_REPORT_MS) {
+    lastIdleDistanceReportMs = now;
+    reportDistance(readUltrasonicMedian());
   }
 }
