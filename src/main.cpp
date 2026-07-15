@@ -915,12 +915,12 @@ bool path1(ColorLabel* detectedColor, ColorLabel target) {
     openGripper(isGripperOpen);
     delay(5000);
     isGripperOpen = !isGripperOpen;
-    checkTagging();
   }
 
   // ── Phase 4: return to the checkpoint ──
   actionLog(F("challenge3: Path 1 - returning to checkpoint"));
   if (!returnToCheckpoint()) return false;
+  if (picked) checkTagging();
   if (detectedColor) *detectedColor = colorRes;
   return true;
 }
@@ -980,12 +980,12 @@ bool path2(ColorLabel* detectedColor, ColorLabel target) {
     openGripper(isGripperOpen);
     delay(5000);
     isGripperOpen = !isGripperOpen;
-    checkTagging();
   }
 
   // ── Phase 5: return to the checkpoint ──
   actionLog(F("challenge3: Path 2 - returning to checkpoint"));
   if (!returnToCheckpoint()) return false;
+  if (picked) checkTagging();
   if (detectedColor) *detectedColor = colorRes;
   return true;
 }
@@ -1045,11 +1045,11 @@ bool path3(ColorLabel* detectedColor, ColorLabel target) {
     openGripper(isGripperOpen);
     delay(5000);
     isGripperOpen = !isGripperOpen;
-    checkTagging();
   }
   // ── Phase 5: return to the checkpoint ──
   actionLog(F("challenge3: Path 3 - returning to checkpoint"));
   if (!returnToCheckpoint()) return false;
+  if (picked) checkTagging();
   if (detectedColor) *detectedColor = colorRes;
   return true;
 }
