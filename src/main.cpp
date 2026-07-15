@@ -133,6 +133,7 @@ void       moveSlowly(int targetCount);
 
 uint16_t   readUltrasonic();
 uint16_t   readUltrasonicMedian();
+static void reportDistance(uint16_t distanceCm);
 
 void       followLineWithDistance();
 void       moveSlowlyToObject();
@@ -580,12 +581,19 @@ static void steerLine(uint8_t speed) {
 static void followLine(int targetCount, uint8_t speed) {
   numLines      = 0;
   wasOnFullLine = false;
+  unsigned long lastDistanceReportMs = millis() - DISTANCE_REPORT_MS;
 
   Serial.print(F("Line follow. Target: "));
   Serial.println(targetCount);
 
   while (numLines < targetCount) {
     if (stopRequested()) return;
+
+    unsigned long now = millis();
+    if (now - lastDistanceReportMs >= DISTANCE_REPORT_MS) {
+      lastDistanceReportMs = now;
+      reportDistance(readUltrasonic());
+    }
 
     bool onCrossLine = digitalRead(LINE_LEFT_PIN)   == HIGH &&
                        digitalRead(LINE_MIDDLE_PIN) == HIGH &&
