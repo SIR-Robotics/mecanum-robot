@@ -23,8 +23,6 @@ const char* OFFLINE_PRESENCE = "{\"to\":\"frontend\",\"type\":\"presence\",\"onl
 
 uint32_t nextArmRequestId = 1;
 uint32_t activeChallengeId = 0;
-uint32_t forwardedCommandId = 0;
-long forwardedCommandKey = -1;
 bool onlineAnnounced = false;
 
 void connectFavoriot();
@@ -145,15 +143,18 @@ long readCommandKey(const String& message) {
 }
 
 void handleUnoCommand(const String& command) {
-  if (command == "CHECK_TAGGING") {
+  if (command.startsWith("COMMAND_ACK ")) {
+    String values = command.substring(12);
+    long key = values.toInt();
+    int separator = values.indexOf(' ');
+    long id = separator < 0 ? -1 : values.substring(separator + 1).toInt();
+    if (key >= 0 && id >= 0) publishFrontend("ack", (uint32_t)id, key);
+  } else if (command == "CHECK_TAGGING") {
     runTagging();
   } else if (command.startsWith("ACTION_LOG ")) {
     String message = command.substring(11);
     actionLog(message.c_str());
-    if (message.startsWith("favoriot key ")) {
-      long key = message.substring(14).toInt();
-      if (key == forwardedCommandKey) publishFrontend("ack", forwardedCommandId, key);
-    } else if (message == "Done." && activeChallengeId != 0) {
+    if (message == "Done." && activeChallengeId != 0) {
       publishFrontend("completed", activeChallengeId);
       activeChallengeId = 0;
     }
@@ -186,6 +187,12 @@ void handleFavoriotMessage(char* topic, byte* payload, unsigned int length) {
   if (message.indexOf("\"to\":\"frontend\"") >= 0) return;
 
   if (readJsonString(message, "\"to\"") == "mecanum" &&
+      readJsonString(message, "\"command\"") == "presence") {
+    mqtt.publish(rpcTopic().c_str(), ONLINE_PRESENCE, false);
+    return;
+  }
+
+  if (readJsonString(message, "\"to\"") == "mecanum" &&
       readJsonString(message, "\"command\"") == "find_color") {
     String color = readJsonString(message, "\"color\"");
     if (color != "red" && color != "blue" && color != "yellow") {
@@ -204,9 +211,7 @@ void handleFavoriotMessage(char* topic, byte* payload, unsigned int length) {
   if (key >= 0) {
     long id = readJsonLong(message, "\"id\"");
     if (id < 0) return;
-    forwardedCommandId = (uint32_t)id;
-    forwardedCommandKey = key;
-    if (key == 13) activeChallengeId = forwardedCommandId;
+    if (key == 13) activeChallengeId = (uint32_t)id;
     unoSerial.print("IR_KEY ");
     unoSerial.print(key);
     unoSerial.print(' ');

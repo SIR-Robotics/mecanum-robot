@@ -257,9 +257,20 @@ bool waitOrStop(uint16_t ms) {
 void handleEsp32Line(String line) {
   line.trim();
   if (line.startsWith("IR_KEY")) {
-    pendingEspKey = line.substring(6).toInt();
+    String values = line.substring(6);
+    values.trim();
+    pendingEspKey = values.toInt();
+    int separator = values.indexOf(' ');
+    long id = separator < 0 ? -1 : values.substring(separator + 1).toInt();
     Serial.print(F("ESP32 command key: "));
     Serial.println(pendingEspKey);
+    if (id >= 0) {
+      espSerial.print(F("COMMAND_ACK "));
+      espSerial.print(pendingEspKey);
+      espSerial.print(' ');
+      espSerial.println(id);
+      espSerial.flush();
+    }
     return;
   }
 
