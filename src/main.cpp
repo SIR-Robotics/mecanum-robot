@@ -33,7 +33,9 @@ const uint8_t SERVO_PIN = 9;
 // band, where they don't all break free from a standstill and small PWM
 // differences turn into large speed differences — keep every speed here well
 // clear of that floor.
-const uint8_t  DRIVE_SPEED   = 41;   // forward speed while following a line
+const uint8_t  MIN_DRIVE_SPEED = 30;
+const uint8_t  MAX_DRIVE_SPEED = 100;
+uint8_t        driveSpeed = 41;      // saved by the dashboard backend
 const uint8_t  TURN_SPEED    = 50;   // in-place spin speed (rotate90 / searching)
 const uint8_t  TURN_SPEED_180 = 40;  // 180 spins twice as far and builds twice the momentum, so it coasts past the line at full TURN_SPEED — spin it slower
 const uint8_t  SLOW_SPEED    = 35;   // final approach to a block / drop
@@ -115,6 +117,7 @@ void       handleEsp32Line(String line);
 void       actionLog(const char* message);
 void       actionLog(const __FlashStringHelper* message);
 void       checkTagging();
+bool       adjustRobotSpeed(int speed);
 
 void       brakePulse(void (mecanumCar::*counterMove)());
 bool       moveShort(uint16_t durationMs = 300);
@@ -257,6 +260,21 @@ bool waitOrStop(uint16_t ms) {
 
 void handleEsp32Line(String line) {
   line.trim();
+  if (line.startsWith("SET_SPEED ")) {
+    String values = line.substring(10);
+    int speed = values.toInt();
+    int separator = values.indexOf(' ');
+    long id = separator < 0 ? -1 : values.substring(separator + 1).toInt();
+    if (adjustRobotSpeed(speed) && id >= 0) {
+      espSerial.print(F("SPEED_ACK "));
+      espSerial.print(speed);
+      espSerial.print(' ');
+      espSerial.println(id);
+      espSerial.flush();
+    }
+    return;
+  }
+
   if (line.startsWith("IR_KEY")) {
     String values = line.substring(6);
     values.trim();
@@ -339,6 +357,14 @@ void checkTagging() {
   espSerial.flush();
 }
 
+bool adjustRobotSpeed(int speed) {
+  if (speed < MIN_DRIVE_SPEED || speed > MAX_DRIVE_SPEED) return false;
+  driveSpeed = speed;
+  Serial.print(F("Drive speed set to "));
+  Serial.println(driveSpeed);
+  return true;
+}
+
 // ==========================================================================
 //  MOTION PRIMITIVES
 // ==========================================================================
@@ -359,7 +385,7 @@ void brakePulse(void (mecanumCar::*counterMove)()) {
 bool moveShort(uint16_t durationMs) {
   Serial.println(F("Moving short distance..."));
 
-  speed_Upper_L = speed_Lower_L = speed_Upper_R = speed_Lower_R = DRIVE_SPEED;
+  speed_Upper_L = speed_Lower_L = speed_Upper_R = speed_Lower_R = driveSpeed;
   robot.Advance();
 
   if (waitOrStop(durationMs)) {
@@ -397,7 +423,7 @@ bool moveForwardWheelSpeeds(uint8_t upperL, uint8_t lowerL, uint8_t upperR, uint
 bool reverseShort(uint16_t durationMs) {
   Serial.println(F("Reversing short distance..."));
 
-  speed_Upper_L = speed_Lower_L = speed_Upper_R = speed_Lower_R = DRIVE_SPEED;
+  speed_Upper_L = speed_Lower_L = speed_Upper_R = speed_Lower_R = driveSpeed;
   robot.Back();
 
   if (waitOrStop(durationMs)) {
@@ -585,7 +611,7 @@ static void followLine(int targetCount, uint8_t speed) {
   }
 }
 
-void followLineWithTarget(int targetCount) { followLine(targetCount, DRIVE_SPEED); }
+void followLineWithTarget(int targetCount) { followLine(targetCount, driveSpeed); }
 void moveSlowly(int targetCount)           { followLine(targetCount, SLOW_SPEED); }
 
 // ==========================================================================
@@ -671,7 +697,7 @@ static bool driveUntilObstacle(uint16_t stopDistanceCm, uint8_t speed) {
 
 // Approach an object: drive up to APPROACH_DISTANCE_CM, pause, then creep in.
 void followLineWithDistance() {
-  if (driveUntilObstacle(APPROACH_DISTANCE_CM, DRIVE_SPEED)) {
+  if (driveUntilObstacle(APPROACH_DISTANCE_CM, driveSpeed)) {
     delay(1000);
     moveSlowlyToObject();
   }
@@ -1090,8 +1116,8 @@ void runCommandKey(int key, const char* source) {
       stopEverything();
       break;
 
-    case 90: // number 6 — wheel test: drive forward at DRIVE_SPEED on all four
-      moveForwardWheelSpeeds(DRIVE_SPEED, DRIVE_SPEED, DRIVE_SPEED, DRIVE_SPEED);
+    case 90: // number 6 — wheel test: drive forward at the configured speed
+      moveForwardWheelSpeeds(driveSpeed, driveSpeed, driveSpeed, driveSpeed);
       break;
 
     case 64: // OK — toggle gripper

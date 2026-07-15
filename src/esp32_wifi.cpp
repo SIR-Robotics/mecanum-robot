@@ -82,6 +82,15 @@ void publishFrontend(const char* type, uint32_t id, long key = -1) {
   mqtt.publish(rpcTopic().c_str(), payload);
 }
 
+void publishSpeedAck(uint32_t id, long speed) {
+  if (!mqtt.connected()) return;
+  char payload[96];
+  snprintf(payload, sizeof(payload),
+           "{\"to\":\"frontend\",\"type\":\"speed_ack\",\"id\":%lu,\"speed\":%ld}",
+           (unsigned long)id, speed);
+  mqtt.publish(rpcTopic().c_str(), payload);
+}
+
 void report(const char* message) {
   Serial.println(message);
   unoSerial.println(message);
@@ -159,6 +168,12 @@ void handleUnoCommand(const String& command) {
     int separator = values.indexOf(' ');
     long id = separator < 0 ? -1 : values.substring(separator + 1).toInt();
     if (key >= 0 && id >= 0) publishFrontend("ack", (uint32_t)id, key);
+  } else if (command.startsWith("SPEED_ACK ")) {
+    String values = command.substring(10);
+    long speed = values.toInt();
+    int separator = values.indexOf(' ');
+    long id = separator < 0 ? -1 : values.substring(separator + 1).toInt();
+    if (speed >= 0 && id >= 0) publishSpeedAck((uint32_t)id, speed);
   } else if (command == "CHECK_TAGGING") {
     runTagging();
   } else if (command.startsWith("ACTION_LOG ")) {
@@ -222,6 +237,18 @@ void handleFavoriotMessage(char* topic, byte* payload, unsigned int length) {
     unoSerial.print("FIND_COLOR ");
     unoSerial.println(color);
     publishFavoriot("command", "find_color_sent");
+    return;
+  }
+
+  if (readJsonString(message, "\"to\"") == "mecanum" &&
+      readJsonString(message, "\"command\"") == "set_speed") {
+    long speed = readJsonLong(message, "\"speed\"");
+    long id = readJsonLong(message, "\"id\"");
+    if (speed < 30 || speed > 100 || id < 0) return;
+    unoSerial.print("SET_SPEED ");
+    unoSerial.print(speed);
+    unoSerial.print(' ');
+    unoSerial.println(id);
     return;
   }
 
