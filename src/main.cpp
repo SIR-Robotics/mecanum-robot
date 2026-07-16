@@ -116,7 +116,6 @@ void       logEsp32Messages();
 void       handleEsp32Line(String line);
 void       actionLog(const char* message);
 void       actionLog(const __FlashStringHelper* message);
-void       checkTagging();
 bool       adjustRobotSpeed(int speed);
 
 void       brakePulse(void (mecanumCar::*counterMove)());
@@ -347,14 +346,6 @@ void actionLog(const __FlashStringHelper* message) {
   espSerial.listen();
   espSerial.print(F("ACTION_LOG "));
   espSerial.println(message);
-  espSerial.flush();
-}
-
-void checkTagging() {
-  while (espSerial.available()) espSerial.read();
-  Serial.println(F("Requesting HuskyLens tagging..."));
-  espSerial.listen();
-  espSerial.println(F("CHECK_TAGGING"));
   espSerial.flush();
 }
 
@@ -872,7 +863,7 @@ bool returnToCheckpoint() {
 // ==========================================================================
 
 // path1 — pick up the object straight ahead, ferry it to the drop lane,
-// release it, request arm tagging, then return to the checkpoint.
+// release it, then return to the checkpoint.
 bool path1(ColorLabel* detectedColor, ColorLabel target) {
   // ── Phase 1: approach the object, grip & identify its colour ──
   actionLog(F("challenge3: Path 1 - approaching object"));
@@ -920,7 +911,6 @@ bool path1(ColorLabel* detectedColor, ColorLabel target) {
   // ── Phase 4: return to the checkpoint ──
   actionLog(F("challenge3: Path 1 - returning to checkpoint"));
   if (!returnToCheckpoint()) return false;
-  if (picked) checkTagging();
   if (detectedColor) *detectedColor = colorRes;
   return true;
 }
@@ -985,7 +975,6 @@ bool path2(ColorLabel* detectedColor, ColorLabel target) {
   // ── Phase 5: return to the checkpoint ──
   actionLog(F("challenge3: Path 2 - returning to checkpoint"));
   if (!returnToCheckpoint()) return false;
-  if (picked) checkTagging();
   if (detectedColor) *detectedColor = colorRes;
   return true;
 }
@@ -1049,7 +1038,6 @@ bool path3(ColorLabel* detectedColor, ColorLabel target) {
   // ── Phase 5: return to the checkpoint ──
   actionLog(F("challenge3: Path 3 - returning to checkpoint"));
   if (!returnToCheckpoint()) return false;
-  if (picked) checkTagging();
   if (detectedColor) *detectedColor = colorRes;
   return true;
 }

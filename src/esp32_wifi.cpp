@@ -31,7 +31,6 @@ const uint32_t UNO_BAUD = 9600;
 const char* ONLINE_PRESENCE = "{\"to\":\"frontend\",\"type\":\"presence\",\"online\":true}";
 const char* OFFLINE_PRESENCE = "{\"to\":\"frontend\",\"type\":\"presence\",\"online\":false}";
 
-uint32_t nextArmRequestId = 1;
 uint32_t activeChallengeId = 0;
 bool onlineAnnounced = false;
 
@@ -119,22 +118,6 @@ String readJsonString(const String& message, const char* key) {
   return end < 0 ? "" : message.substring(start + 1, end);
 }
 
-bool publishTaggingRequest(uint32_t id) {
-  if (!mqtt.connected()) return false;
-
-  char payload[72];
-  snprintf(payload, sizeof(payload),
-           "{\"to\":\"arm\",\"command\":\"check_tagging\",\"id\":%lu}",
-           (unsigned long)id);
-  return mqtt.publish(rpcTopic().c_str(), payload);
-}
-
-void runTagging() {
-  connectFavoriot();
-  uint32_t id = nextArmRequestId++;
-  if (!publishTaggingRequest(id)) unoSerial.println("TAGGING_FAILED mqtt_unavailable");
-}
-
 long readCommandKey(const String& message) {
   String value = message;
   value.trim();
@@ -174,8 +157,6 @@ void handleUnoCommand(const String& command) {
     int separator = values.indexOf(' ');
     long id = separator < 0 ? -1 : values.substring(separator + 1).toInt();
     if (speed >= 0 && id >= 0) publishSpeedAck((uint32_t)id, speed);
-  } else if (command == "CHECK_TAGGING") {
-    runTagging();
   } else if (command.startsWith("ACTION_LOG ")) {
     String message = command.substring(11);
     actionLog(message.c_str());
@@ -198,23 +179,6 @@ void handleFavoriotMessage(char* topic, byte* payload, unsigned int length) {
   String message((const char*)payload, length);
   message.toLowerCase();
   Serial.printf("Favoriot %s: %s\n", topic, message.c_str());
-
-  if (readJsonString(message, "\"to\"") == "mecanum" &&
-      readJsonString(message, "\"type\"") == "tagging_result") {
-    String status = readJsonString(message, "\"status\"");
-    if (status == "started") {
-      String color = readJsonString(message, "\"color\"");
-      color.toUpperCase();
-      unoSerial.print("TAGGING_STARTED ");
-      unoSerial.print(readJsonLong(message, "\"tag\""));
-      unoSerial.print(' ');
-      unoSerial.println(color);
-    } else {
-      unoSerial.print("TAGGING_FAILED ");
-      unoSerial.println(status);
-    }
-    return;
-  }
 
   if (message.indexOf("\"to\":\"arm\"") >= 0) return;
   if (message.indexOf("\"to\":\"frontend\"") >= 0) return;
